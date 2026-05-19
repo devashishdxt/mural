@@ -1,3 +1,4 @@
+mod ansi;
 mod color;
 mod error;
 mod line;

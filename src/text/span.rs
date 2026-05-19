@@ -1,4 +1,7 @@
-use super::{Style, TextError};
+use super::{
+    Line, Style, TextError,
+    ansi::{self, ParseMode},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {
@@ -15,6 +18,14 @@ impl Span {
 
     pub fn plain(content: impl Into<String>) -> Result<Self, TextError> {
         Self::new(content, Style::new())
+    }
+
+    pub fn from_raw(content: impl AsRef<str>) -> Result<Self, TextError> {
+        single_span(ansi::parse_text(content.as_ref(), ParseMode::Raw)?)
+    }
+
+    pub fn from_ansi(content: impl AsRef<str>) -> Result<Self, TextError> {
+        single_span(ansi::parse_text(content.as_ref(), ParseMode::Ansi)?)
     }
 
     /// Creates a span without validating content invariants.
@@ -37,6 +48,19 @@ impl Span {
 
     pub fn style(&self) -> Style {
         self.style
+    }
+}
+
+fn single_span(mut lines: Vec<Line>) -> Result<Span, TextError> {
+    if lines.len() != 1 {
+        return Err(TextError::multiple_lines());
+    }
+
+    let mut spans = lines.remove(0).spans().to_vec();
+    match spans.len() {
+        0 => Ok(Span::new("", Style::new())?),
+        1 => Ok(spans.remove(0)),
+        _ => Err(TextError::multiple_styles()),
     }
 }
 

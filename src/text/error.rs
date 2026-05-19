@@ -11,6 +11,18 @@ impl TextError {
             message: "text contains unsupported structural content",
         }
     }
+
+    pub(crate) fn multiple_lines() -> Self {
+        Self {
+            message: "text constructor expected a single line",
+        }
+    }
+
+    pub(crate) fn multiple_styles() -> Self {
+        Self {
+            message: "text constructor expected a single style",
+        }
+    }
 }
 
 impl fmt::Display for TextError {

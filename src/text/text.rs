@@ -1,4 +1,7 @@
-use super::{Line, Span, Style, TextError};
+use super::{
+    Line, Span, Style, TextError,
+    ansi::{self, ParseMode},
+};
 use crate::Render;
 use textwrap::Options;
 
@@ -19,6 +22,18 @@ impl Text {
             .map(Line::from_plain)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self { lines })
+    }
+
+    pub fn from_raw(content: impl AsRef<str>) -> Result<Self, TextError> {
+        Ok(Self {
+            lines: ansi::parse_text(content.as_ref(), ParseMode::Raw)?,
+        })
+    }
+
+    pub fn from_ansi(content: impl AsRef<str>) -> Result<Self, TextError> {
+        Ok(Self {
+            lines: ansi::parse_text(content.as_ref(), ParseMode::Ansi)?,
+        })
     }
 
     pub fn from_lines(lines: Vec<Line>) -> Self {
