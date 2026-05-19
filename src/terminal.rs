@@ -39,13 +39,18 @@ impl<B: Backend> Terminal<B> {
 
     pub fn render(&mut self) -> io::Result<()> {
         let lines = self.rendered_lines();
+        self.print_lines(&lines)?;
+        self.backend.flush()
+    }
+
+    fn print_lines(&mut self, lines: &[Line]) -> io::Result<()> {
         for (index, line) in lines.iter().enumerate() {
             if index > 0 {
                 self.backend.newline()?;
             }
             self.backend.print(line)?;
         }
-        self.backend.flush()
+        Ok(())
     }
 
     fn rendered_lines(&self) -> Vec<Line> {

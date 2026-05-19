@@ -1,4 +1,4 @@
-use brisk::{Color, Line, Modifiers, Span, Style, Text};
+use brisk::{Color, Line, Modifiers, Span, Style, Text, TextError};
 
 #[test]
 fn ansi_text_construction_converts_supported_sgr_styles() {
@@ -129,7 +129,16 @@ fn line_and_span_ansi_constructors_enforce_their_invariants() {
         Span::new("underlined", Style::new().underline()).unwrap()
     );
 
-    assert!(Line::from_ansi("one\ntwo").is_err());
-    assert!(Span::from_ansi("one\ntwo").is_err());
-    assert!(Span::from_ansi("plain \x1b[31mred").is_err());
+    assert_eq!(
+        Line::from_ansi("one\ntwo").unwrap_err(),
+        TextError::MultipleLines
+    );
+    assert_eq!(
+        Span::from_ansi("one\ntwo").unwrap_err(),
+        TextError::MultipleLines
+    );
+    assert_eq!(
+        Span::from_ansi("plain \x1b[31mred").unwrap_err(),
+        TextError::MultipleStyles
+    );
 }

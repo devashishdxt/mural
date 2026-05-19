@@ -62,22 +62,32 @@ impl Render for Text {
 
 fn wrap_line(line: &Line, width: usize) -> Vec<Line> {
     if line.spans().is_empty() {
-        return vec![Line::from_spans(Vec::new())];
+        return vec![empty_line()];
     }
 
-    let source = styled_chars(line);
-    let mut source_index = 0;
-    let options = Options::new(width).break_words(true);
-    let plain_content = line.plain_content();
-    let wrapped = textwrap::wrap(&plain_content, options);
+    let styled_source = styled_chars(line);
+    let mut next_source_index = 0;
+    let wrapped_fragments = wrap_plain_content(&line.plain_content(), width);
 
-    if wrapped.is_empty() {
-        return vec![Line::from_spans(Vec::new())];
+    if wrapped_fragments.is_empty() {
+        return vec![empty_line()];
     }
 
-    wrapped
+    wrapped_fragments
         .into_iter()
-        .map(|fragment| styled_fragment_line(&source, &mut source_index, &fragment))
+        .map(|fragment| styled_fragment_line(&styled_source, &mut next_source_index, &fragment))
+        .collect()
+}
+
+fn empty_line() -> Line {
+    Line::from_spans(Vec::new())
+}
+
+fn wrap_plain_content(content: &str, width: usize) -> Vec<String> {
+    let options = Options::new(width).break_words(true);
+    textwrap::wrap(content, options)
+        .into_iter()
+        .map(|fragment| fragment.into_owned())
         .collect()
 }
 
@@ -89,53 +99,53 @@ fn styled_chars(line: &Line) -> Vec<(char, Style)> {
 }
 
 fn styled_fragment_line(
-    source: &[(char, Style)],
-    source_index: &mut usize,
+    styled_source: &[(char, Style)],
+    next_source_index: &mut usize,
     fragment: &str,
 ) -> Line {
     let mut spans = Vec::new();
-    let mut current_text = String::new();
-    let mut current_style = None;
+    let mut span_content = String::new();
+    let mut span_style = None;
 
-    for target in fragment.chars() {
-        let Some((_, style)) = next_matching_char(source, source_index, target) else {
+    for target_char in fragment.chars() {
+        let Some(style) = next_matching_style(styled_source, next_source_index, target_char) else {
             continue;
         };
 
-        if current_style != Some(style) {
-            flush_span(&mut spans, &mut current_text, current_style);
-            current_style = Some(style);
+        if span_style != Some(style) {
+            flush_span(&mut spans, &mut span_content, span_style);
+            span_style = Some(style);
         }
 
-        current_text.push(target);
+        span_content.push(target_char);
     }
 
-    flush_span(&mut spans, &mut current_text, current_style);
+    flush_span(&mut spans, &mut span_content, span_style);
     Line::from_spans(spans)
 }
 
-fn next_matching_char(
-    source: &[(char, Style)],
-    source_index: &mut usize,
-    target: char,
-) -> Option<(char, Style)> {
-    while let Some(&(ch, style)) = source.get(*source_index) {
-        *source_index += 1;
-        if ch == target {
-            return Some((ch, style));
+fn next_matching_style(
+    styled_source: &[(char, Style)],
+    next_source_index: &mut usize,
+    target_char: char,
+) -> Option<Style> {
+    while let Some(&(source_char, style)) = styled_source.get(*next_source_index) {
+        *next_source_index += 1;
+        if source_char == target_char {
+            return Some(style);
         }
     }
 
     None
 }
 
-fn flush_span(spans: &mut Vec<Span>, text: &mut String, style: Option<Style>) {
-    if text.is_empty() {
+fn flush_span(spans: &mut Vec<Span>, content: &mut String, style: Option<Style>) {
+    if content.is_empty() {
         return;
     }
 
     spans.push(
-        Span::new(std::mem::take(text), style.unwrap_or_default())
+        Span::new(std::mem::take(content), style.unwrap_or_default())
             .expect("wrapped span content preserves invariants"),
     );
 }

@@ -1,5 +1,9 @@
 use super::{Color, Line, Span, Style, TextError};
 use ansi_str::{AnsiStr, Color as AnsiColor, Style as AnsiStyle, get_blocks};
+use std::{iter::Peekable, str::Chars};
+
+const TAB_REPLACEMENT: &str = "    ";
+type CharStream<'a> = Peekable<Chars<'a>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParseMode {
@@ -164,7 +168,7 @@ fn sanitize_text(content: &str) -> String {
 
     while let Some(ch) = chars.next() {
         match ch {
-            '\t' => sanitized.push_str("    "),
+            '\t' => sanitized.push_str(TAB_REPLACEMENT),
             '\u{009b}' => skip_c1_control_sequence(&mut chars),
             '\u{0090}' | '\u{0098}' | '\u{009d}' | '\u{009e}' | '\u{009f}' => {
                 skip_c1_string_control(&mut chars)
@@ -177,7 +181,7 @@ fn sanitize_text(content: &str) -> String {
     sanitized
 }
 
-fn skip_c1_control_sequence(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+fn skip_c1_control_sequence(chars: &mut CharStream<'_>) {
     for ch in chars.by_ref() {
         if ('@'..='~').contains(&ch) {
             break;
@@ -185,7 +189,7 @@ fn skip_c1_control_sequence(chars: &mut std::iter::Peekable<std::str::Chars<'_>>
     }
 }
 
-fn skip_c1_string_control(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+fn skip_c1_string_control(chars: &mut CharStream<'_>) {
     while let Some(ch) = chars.next() {
         if ch == '\x07' || ch == '\u{009c}' {
             return;

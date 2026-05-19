@@ -1,5 +1,5 @@
 use brisk::{
-    Color, Line, Modifiers, Size, Span, Style, Terminal, Text,
+    Color, Line, Modifiers, Size, Span, Style, Terminal, Text, TextError,
     backend::fake::{FakeBackend, Operation},
 };
 
@@ -28,9 +28,18 @@ fn line_and_span_constructors_reject_structural_content() {
     assert!(Span::new("hello", Style::new()).is_ok());
     assert!(Line::from_plain("hello").is_ok());
 
-    assert!(Span::new("hello\nworld", Style::new()).is_err());
-    assert!(Span::new("hello\tworld", Style::new()).is_err());
-    assert!(Line::from_plain("hello\nworld").is_err());
+    assert_eq!(
+        Span::new("hello\nworld", Style::new()).unwrap_err(),
+        TextError::StructuralContent
+    );
+    assert_eq!(
+        Span::new("hello\tworld", Style::new()).unwrap_err(),
+        TextError::StructuralContent
+    );
+    assert_eq!(
+        Line::from_plain("hello\nworld").unwrap_err(),
+        TextError::StructuralContent
+    );
 
     let unchecked_span = unsafe { Span::new_unchecked("hello\nworld", Style::new()) };
     assert_eq!(unchecked_span.content(), "hello\nworld");

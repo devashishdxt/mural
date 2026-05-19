@@ -1,5 +1,9 @@
 use crate::{Backend, Color, Line, Modifiers, Size, Style};
-use crossterm::{cursor, execute, queue, terminal};
+use crossterm::{
+    cursor, execute, queue,
+    style::{Attribute, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
+    terminal,
+};
 use std::io::{self, Write};
 
 pub struct StdoutBackend<W: Write> {
@@ -16,48 +20,29 @@ impl<W: Write> StdoutBackend<W> {
     }
 
     fn write_style_prefix(&mut self, style: Style) -> io::Result<()> {
-        if let Some(fg) = style.foreground() {
-            queue!(
-                self.writer,
-                crossterm::style::SetForegroundColor(to_crossterm_color(fg))
-            )?;
+        if let Some(color) = style.foreground() {
+            queue!(self.writer, SetForegroundColor(to_crossterm_color(color)))?;
         }
-        if let Some(bg) = style.background() {
-            queue!(
-                self.writer,
-                crossterm::style::SetBackgroundColor(to_crossterm_color(bg))
-            )?;
+        if let Some(color) = style.background() {
+            queue!(self.writer, SetBackgroundColor(to_crossterm_color(color)))?;
         }
+
         let modifiers = style.modifiers();
-        if modifiers.contains(Modifiers::BOLD) {
-            queue!(
-                self.writer,
-                crossterm::style::SetAttribute(crossterm::style::Attribute::Bold)
-            )?;
-        }
-        if modifiers.contains(Modifiers::DIM) {
-            queue!(
-                self.writer,
-                crossterm::style::SetAttribute(crossterm::style::Attribute::Dim)
-            )?;
-        }
-        if modifiers.contains(Modifiers::ITALIC) {
-            queue!(
-                self.writer,
-                crossterm::style::SetAttribute(crossterm::style::Attribute::Italic)
-            )?;
-        }
-        if modifiers.contains(Modifiers::UNDERLINE) {
-            queue!(
-                self.writer,
-                crossterm::style::SetAttribute(crossterm::style::Attribute::Underlined)
-            )?;
-        }
-        if modifiers.contains(Modifiers::REVERSED) {
-            queue!(
-                self.writer,
-                crossterm::style::SetAttribute(crossterm::style::Attribute::Reverse)
-            )?;
+        self.write_modifier(modifiers, Modifiers::BOLD, Attribute::Bold)?;
+        self.write_modifier(modifiers, Modifiers::DIM, Attribute::Dim)?;
+        self.write_modifier(modifiers, Modifiers::ITALIC, Attribute::Italic)?;
+        self.write_modifier(modifiers, Modifiers::UNDERLINE, Attribute::Underlined)?;
+        self.write_modifier(modifiers, Modifiers::REVERSED, Attribute::Reverse)
+    }
+
+    fn write_modifier(
+        &mut self,
+        modifiers: Modifiers,
+        modifier: Modifiers,
+        attribute: Attribute,
+    ) -> io::Result<()> {
+        if modifiers.contains(modifier) {
+            queue!(self.writer, SetAttribute(attribute))?;
         }
         Ok(())
     }
@@ -108,7 +93,7 @@ impl<W: Write> Backend for StdoutBackend<W> {
             self.write_style_prefix(style)?;
             self.writer.write_all(span.content().as_bytes())?;
             if style != Style::new() {
-                queue!(self.writer, crossterm::style::ResetColor)?;
+                queue!(self.writer, ResetColor)?;
             }
         }
         Ok(())
