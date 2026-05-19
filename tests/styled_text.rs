@@ -59,7 +59,7 @@ fn text_represents_multiple_and_empty_lines_and_is_renderable() {
     assert!(Text::empty().lines().is_empty());
 
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
-    terminal.append_live(text).unwrap();
+    terminal.push_live(text).unwrap();
 
     terminal.render().unwrap();
 
@@ -87,7 +87,7 @@ fn backend_observes_style_only_differences() {
     let text = Text::from_lines(vec![plain_line.clone(), styled_line.clone()]);
 
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
-    terminal.append_live(text).unwrap();
+    terminal.push_live(text).unwrap();
 
     terminal.render().unwrap();
 
@@ -115,7 +115,7 @@ fn textwrap_wrapping_preserves_span_styles() {
     ])]);
 
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(6, 24))).unwrap();
-    terminal.append_live(text).unwrap();
+    terminal.push_live(text).unwrap();
 
     terminal.render().unwrap();
 
@@ -140,7 +140,7 @@ fn textwrap_wrapping_splits_a_span_without_losing_its_style() {
     ])]);
 
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(6, 24))).unwrap();
-    terminal.append_live(text).unwrap();
+    terminal.push_live(text).unwrap();
 
     terminal.render().unwrap();
 

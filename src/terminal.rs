@@ -1,11 +1,45 @@
-use crate::{Backend, Line, Render, Size, StdoutBackend};
-use std::io;
+use crate::{Backend, Line, Render, Size, StdoutBackend, TerminalError, Text};
+use std::{any::type_name, io};
+
+use crate::render::RenderBlock;
+
+struct BlockEntry {
+    id: Option<String>,
+    block: Box<dyn RenderBlock>,
+    dirty: bool,
+}
+
+impl BlockEntry {
+    fn unidentified(block: impl Render + 'static) -> Self {
+        Self {
+            id: None,
+            block: Box::new(block),
+            dirty: true,
+        }
+    }
+
+    fn identified(id: String, block: impl Render + 'static) -> Self {
+        Self {
+            id: Some(id),
+            block: Box::new(block),
+            dirty: true,
+        }
+    }
+
+    fn render(&self, width: u16) -> Text {
+        self.block.render(width)
+    }
+
+    fn has_id(&self, id: &str) -> bool {
+        self.id.as_deref() == Some(id)
+    }
+}
 
 pub struct Terminal<B> {
     backend: B,
     size: Size,
-    live_blocks: Vec<Box<dyn Render>>,
-    pinned_blocks: Vec<Box<dyn Render>>,
+    live_blocks: Vec<BlockEntry>,
+    pinned_blocks: Vec<BlockEntry>,
     finished: bool,
 }
 
@@ -36,23 +70,56 @@ impl<B: Backend> Terminal<B> {
         &mut self.backend
     }
 
-    pub fn append_live(&mut self, block: impl Render + 'static) -> io::Result<()> {
+    pub fn push_live(&mut self, block: impl Render + 'static) -> io::Result<()> {
         self.ensure_unfinished()?;
-        self.live_blocks.push(Box::new(block));
+        self.live_blocks.push(BlockEntry::unidentified(block));
         Ok(())
     }
 
-    pub fn append_pinned(&mut self, block: impl Render + 'static) -> io::Result<()> {
+    pub fn push_pinned(&mut self, block: impl Render + 'static) -> io::Result<()> {
         self.ensure_unfinished()?;
-        self.pinned_blocks.push(Box::new(block));
+        self.pinned_blocks.push(BlockEntry::unidentified(block));
         Ok(())
+    }
+
+    pub fn insert_live(
+        &mut self,
+        id: impl Into<String>,
+        block: impl Render + 'static,
+    ) -> Result<(), TerminalError> {
+        self.insert_identified(id, block, BlockRegion::Live)
+    }
+
+    pub fn insert_pinned(
+        &mut self,
+        id: impl Into<String>,
+        block: impl Render + 'static,
+    ) -> Result<(), TerminalError> {
+        self.insert_identified(id, block, BlockRegion::Pinned)
+    }
+
+    pub fn live_block_mut<T: 'static>(&mut self, id: &str) -> Result<&mut T, TerminalError> {
+        self.block_mut(id, BlockRegion::Live)
+    }
+
+    pub fn pinned_block_mut<T: 'static>(&mut self, id: &str) -> Result<&mut T, TerminalError> {
+        self.block_mut(id, BlockRegion::Pinned)
+    }
+
+    pub fn is_block_dirty(&self, id: &str) -> Result<bool, TerminalError> {
+        self.blocks()
+            .find(|block| block.has_id(id))
+            .map(|block| block.dirty)
+            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })
     }
 
     pub fn render(&mut self) -> io::Result<()> {
         self.ensure_unfinished()?;
         let lines = self.rendered_lines();
         self.print_lines(&lines)?;
-        self.backend.flush()
+        self.backend.flush()?;
+        self.mark_rendered_blocks_clean();
+        Ok(())
     }
 
     pub fn finish(&mut self) -> io::Result<()> {
@@ -74,12 +141,104 @@ impl<B: Backend> Terminal<B> {
         Ok(())
     }
 
+    fn insert_identified(
+        &mut self,
+        id: impl Into<String>,
+        block: impl Render + 'static,
+        region: BlockRegion,
+    ) -> Result<(), TerminalError> {
+        self.ensure_unfinished_for_mutation()?;
+        let id = id.into();
+        if self.has_id(&id) {
+            return Err(TerminalError::DuplicateBlockId { id });
+        }
+
+        match region {
+            BlockRegion::Live => self.live_blocks.push(BlockEntry::identified(id, block)),
+            BlockRegion::Pinned => self.pinned_blocks.push(BlockEntry::identified(id, block)),
+        }
+        Ok(())
+    }
+
+    fn block_mut<T: 'static>(
+        &mut self,
+        id: &str,
+        expected_region: BlockRegion,
+    ) -> Result<&mut T, TerminalError> {
+        self.ensure_unfinished_for_mutation()?;
+        let actual_region = self
+            .region_containing_id(id)
+            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })?;
+        if actual_region != expected_region {
+            return Err(expected_region.expected_block_error(id));
+        }
+
+        let block = self
+            .blocks_in_region_mut(expected_region)
+            .iter_mut()
+            .find(|block| block.has_id(id))
+            .expect("region_containing_id confirmed the block exists");
+        if !block.block.as_any().is::<T>() {
+            return Err(TerminalError::WrongBlockType {
+                id: id.to_owned(),
+                expected: type_name::<T>(),
+                actual: block.block.type_name(),
+            });
+        }
+
+        block.dirty = true;
+        Ok(block
+            .block
+            .as_any_mut()
+            .downcast_mut::<T>()
+            .expect("type was checked before downcast"))
+    }
+
+    fn blocks(&self) -> impl Iterator<Item = &BlockEntry> {
+        self.live_blocks.iter().chain(self.pinned_blocks.iter())
+    }
+
+    fn blocks_mut(&mut self) -> impl Iterator<Item = &mut BlockEntry> {
+        self.live_blocks
+            .iter_mut()
+            .chain(self.pinned_blocks.iter_mut())
+    }
+
+    fn blocks_in_region_mut(&mut self, region: BlockRegion) -> &mut Vec<BlockEntry> {
+        match region {
+            BlockRegion::Live => &mut self.live_blocks,
+            BlockRegion::Pinned => &mut self.pinned_blocks,
+        }
+    }
+
+    fn has_id(&self, id: &str) -> bool {
+        self.blocks().any(|block| block.has_id(id))
+    }
+
+    fn region_containing_id(&self, id: &str) -> Option<BlockRegion> {
+        if self.live_blocks.iter().any(|block| block.has_id(id)) {
+            Some(BlockRegion::Live)
+        } else if self.pinned_blocks.iter().any(|block| block.has_id(id)) {
+            Some(BlockRegion::Pinned)
+        } else {
+            None
+        }
+    }
+
     fn ensure_unfinished(&self) -> io::Result<()> {
         if self.finished {
             Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "terminal has already finished",
             ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_unfinished_for_mutation(&self) -> Result<(), TerminalError> {
+        if self.finished {
+            Err(TerminalError::Finished)
         } else {
             Ok(())
         }
@@ -96,14 +255,14 @@ impl<B: Backend> Terminal<B> {
     }
 
     fn rendered_lines(&self) -> Vec<Line> {
-        self.render_blocks(self.live_blocks.iter().chain(self.pinned_blocks.iter()))
+        self.render_blocks(self.blocks())
     }
 
     fn rendered_live_lines(&self) -> Vec<Line> {
         self.render_blocks(self.live_blocks.iter())
     }
 
-    fn render_blocks<'a>(&self, blocks: impl Iterator<Item = &'a Box<dyn Render>>) -> Vec<Line> {
+    fn render_blocks<'a>(&self, blocks: impl Iterator<Item = &'a BlockEntry>) -> Vec<Line> {
         let safe_width = self.size.width().saturating_sub(1);
         blocks
             .flat_map(|block| {
@@ -114,5 +273,26 @@ impl<B: Backend> Terminal<B> {
                     .to_vec()
             })
             .collect()
+    }
+
+    fn mark_rendered_blocks_clean(&mut self) {
+        for block in self.blocks_mut() {
+            block.dirty = false;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockRegion {
+    Live,
+    Pinned,
+}
+
+impl BlockRegion {
+    fn expected_block_error(self, id: &str) -> TerminalError {
+        match self {
+            BlockRegion::Live => TerminalError::ExpectedLiveBlock { id: id.to_owned() },
+            BlockRegion::Pinned => TerminalError::ExpectedPinnedBlock { id: id.to_owned() },
+        }
     }
 }

@@ -243,7 +243,7 @@ fn terminal_defensively_wraps_blocks_that_ignore_the_requested_width() {
     }
 
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(4, 24))).unwrap();
-    terminal.append_live(IgnoresWidth).unwrap();
+    terminal.push_live(IgnoresWidth).unwrap();
 
     terminal.render().unwrap();
 

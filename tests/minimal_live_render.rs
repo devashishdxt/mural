@@ -17,7 +17,7 @@ fn constructor_queries_size_and_hides_cursor_without_printing_or_clearing() {
 fn manual_render_emits_live_text_without_clearing_and_flushes() {
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
     terminal
-        .append_live(Text::from_plain("hello").unwrap())
+        .push_live(Text::from_plain("hello").unwrap())
         .unwrap();
 
     terminal.render().unwrap();
@@ -37,10 +37,10 @@ fn manual_render_emits_live_text_without_clearing_and_flushes() {
 fn normal_render_prints_pinned_blocks_after_live_blocks() {
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
     terminal
-        .append_live(Text::from_plain("transcript").unwrap())
+        .push_live(Text::from_plain("transcript").unwrap())
         .unwrap();
     terminal
-        .append_pinned(Text::from_plain("status").unwrap())
+        .push_pinned(Text::from_plain("status").unwrap())
         .unwrap();
 
     terminal.render().unwrap();
@@ -62,10 +62,10 @@ fn normal_render_prints_pinned_blocks_after_live_blocks() {
 fn finish_redraws_live_only_and_restores_cursor() {
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
     terminal
-        .append_live(Text::from_plain("transcript").unwrap())
+        .push_live(Text::from_plain("transcript").unwrap())
         .unwrap();
     terminal
-        .append_pinned(Text::from_plain("status").unwrap())
+        .push_pinned(Text::from_plain("status").unwrap())
         .unwrap();
     terminal.render().unwrap();
 
@@ -94,7 +94,7 @@ fn finish_redraws_live_only_and_restores_cursor() {
 fn finish_is_idempotent_without_extra_blank_lines() {
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
     terminal
-        .append_live(Text::from_plain("transcript").unwrap())
+        .push_live(Text::from_plain("transcript").unwrap())
         .unwrap();
 
     terminal.finish().unwrap();
@@ -129,9 +129,9 @@ fn finish_does_not_render_pinned_blocks() {
 
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
     terminal
-        .append_live(Text::from_plain("transcript").unwrap())
+        .push_live(Text::from_plain("transcript").unwrap())
         .unwrap();
-    terminal.append_pinned(PanicIfRendered).unwrap();
+    terminal.push_pinned(PanicIfRendered).unwrap();
 
     terminal.finish().unwrap();
 
@@ -152,12 +152,12 @@ fn finished_terminal_rejects_more_rendering_and_mutation() {
     assert!(terminal.render().is_err());
     assert!(
         terminal
-            .append_live(Text::from_plain("late live").unwrap())
+            .push_live(Text::from_plain("late live").unwrap())
             .is_err()
     );
     assert!(
         terminal
-            .append_pinned(Text::from_plain("late pinned").unwrap())
+            .push_pinned(Text::from_plain("late pinned").unwrap())
             .is_err()
     );
 }
@@ -166,7 +166,7 @@ fn finished_terminal_rejects_more_rendering_and_mutation() {
 fn text_renders_at_safe_width_with_separators_only_between_lines() {
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(6, 24))).unwrap();
     terminal
-        .append_live(Text::from_plain("helloworld\n!").unwrap())
+        .push_live(Text::from_plain("helloworld\n!").unwrap())
         .unwrap();
 
     terminal.render().unwrap();
@@ -197,7 +197,7 @@ fn render_trait_receives_the_safe_printable_width() {
     }
 
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(10, 24))).unwrap();
-    terminal.append_live(WidthEcho).unwrap();
+    terminal.push_live(WidthEcho).unwrap();
 
     terminal.render().unwrap();
 
