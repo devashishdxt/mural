@@ -5,6 +5,8 @@ use std::io;
 pub enum Operation {
     QuerySize,
     HideCursor,
+    ShowCursor,
+    MoveToColumn(u16),
     Print(Line),
     Newline,
     Clear,
@@ -38,6 +40,16 @@ impl Backend for FakeBackend {
 
     fn hide_cursor(&mut self) -> io::Result<()> {
         self.operations.push(Operation::HideCursor);
+        Ok(())
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        self.operations.push(Operation::ShowCursor);
+        Ok(())
+    }
+
+    fn move_to_column(&mut self, column: u16) -> io::Result<()> {
+        self.operations.push(Operation::MoveToColumn(column));
         Ok(())
     }
 

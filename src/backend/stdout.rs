@@ -87,6 +87,14 @@ impl<W: Write> Backend for StdoutBackend<W> {
         execute!(self.writer, cursor::Hide)
     }
 
+    fn show_cursor(&mut self) -> io::Result<()> {
+        execute!(self.writer, cursor::Show)
+    }
+
+    fn move_to_column(&mut self, column: u16) -> io::Result<()> {
+        execute!(self.writer, cursor::MoveToColumn(column))
+    }
+
     fn print(&mut self, line: &Line) -> io::Result<()> {
         for span in line.spans() {
             let style = span.style();
