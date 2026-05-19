@@ -49,6 +49,14 @@ impl Line {
     pub fn plain_content(&self) -> String {
         self.spans.iter().map(Span::content).collect()
     }
+
+    pub fn display_width(&self) -> usize {
+        self.spans.iter().map(Span::display_width).sum()
+    }
+
+    pub fn display_height(&self) -> usize {
+        1
+    }
 }
 
 fn single_line(mut lines: Vec<Line>) -> Result<Line, TextError> {

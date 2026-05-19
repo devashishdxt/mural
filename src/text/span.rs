@@ -2,6 +2,7 @@ use super::{
     Line, Style, TextError,
     ansi::{self, ParseMode},
 };
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {
@@ -48,6 +49,14 @@ impl Span {
 
     pub fn style(&self) -> Style {
         self.style
+    }
+
+    pub fn display_width(&self) -> usize {
+        UnicodeWidthStr::width(self.content.as_str())
+    }
+
+    pub fn display_height(&self) -> usize {
+        1
     }
 }
 

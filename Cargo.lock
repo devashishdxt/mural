@@ -41,6 +41,8 @@ dependencies = [
  "crossterm",
  "textwrap",
  "thiserror",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

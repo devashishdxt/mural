@@ -57,7 +57,13 @@ impl<B: Backend> Terminal<B> {
         let safe_width = self.size.width().saturating_sub(1);
         self.live_blocks
             .iter()
-            .flat_map(|block| block.render(safe_width).lines().to_vec())
+            .flat_map(|block| {
+                block
+                    .render(safe_width)
+                    .into_wrapped(usize::from(safe_width))
+                    .lines()
+                    .to_vec()
+            })
             .collect()
     }
 }
