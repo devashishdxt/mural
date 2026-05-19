@@ -1,5 +1,5 @@
 use brisk::{
-    Render, Size, StdoutBackend, Terminal, TextBlock,
+    Line, Render, Size, StdoutBackend, Terminal, Text,
     backend::fake::{FakeBackend, Operation},
 };
 
@@ -16,26 +16,8 @@ fn constructor_queries_size_and_hides_cursor_without_printing_or_clearing() {
 #[test]
 fn manual_render_emits_live_text_without_clearing_and_flushes() {
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
-    terminal.append_live(TextBlock::new("hello")).unwrap();
-
-    terminal.render().unwrap();
-
-    assert_eq!(
-        terminal.backend().operations(),
-        &[
-            Operation::QuerySize,
-            Operation::HideCursor,
-            Operation::Print("hello".to_owned()),
-            Operation::Flush,
-        ]
-    );
-}
-
-#[test]
-fn text_blocks_render_at_safe_width_with_separators_only_between_lines() {
-    let mut terminal = Terminal::new(FakeBackend::new(Size::new(6, 24))).unwrap();
     terminal
-        .append_live(TextBlock::new("helloworld\n!"))
+        .append_live(Text::from_plain("hello").unwrap())
         .unwrap();
 
     terminal.render().unwrap();
@@ -45,11 +27,31 @@ fn text_blocks_render_at_safe_width_with_separators_only_between_lines() {
         &[
             Operation::QuerySize,
             Operation::HideCursor,
-            Operation::Print("hello".to_owned()),
+            Operation::Print(Line::from_plain("hello").unwrap()),
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn text_renders_at_safe_width_with_separators_only_between_lines() {
+    let mut terminal = Terminal::new(FakeBackend::new(Size::new(6, 24))).unwrap();
+    terminal
+        .append_live(Text::from_plain("helloworld\n!").unwrap())
+        .unwrap();
+
+    terminal.render().unwrap();
+
+    assert_eq!(
+        terminal.backend().operations(),
+        &[
+            Operation::QuerySize,
+            Operation::HideCursor,
+            Operation::Print(Line::from_plain("hello").unwrap()),
             Operation::Newline,
-            Operation::Print("world".to_owned()),
+            Operation::Print(Line::from_plain("world").unwrap()),
             Operation::Newline,
-            Operation::Print("!".to_owned()),
+            Operation::Print(Line::from_plain("!").unwrap()),
             Operation::Flush,
         ]
     );
@@ -60,8 +62,8 @@ fn render_trait_receives_the_safe_printable_width() {
     struct WidthEcho;
 
     impl Render for WidthEcho {
-        fn render(&self, width: u16) -> Vec<String> {
-            vec![format!("width={width}")]
+        fn render(&self, width: u16) -> Text {
+            Text::from_plain(format!("width={width}")).unwrap()
         }
     }
 
@@ -74,7 +76,7 @@ fn render_trait_receives_the_safe_printable_width() {
         terminal
             .backend()
             .operations()
-            .contains(&Operation::Print("width=9".to_owned()))
+            .contains(&Operation::Print(Line::from_plain("width=9").unwrap()))
     );
 }
 

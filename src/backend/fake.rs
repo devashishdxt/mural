@@ -1,11 +1,11 @@
-use crate::{Backend, Size};
+use crate::{Backend, Line, Size};
 use std::io;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
     QuerySize,
     HideCursor,
-    Print(String),
+    Print(Line),
     Newline,
     Clear,
     Flush,
@@ -41,8 +41,8 @@ impl Backend for FakeBackend {
         Ok(())
     }
 
-    fn print(&mut self, content: &str) -> io::Result<()> {
-        self.operations.push(Operation::Print(content.to_owned()));
+    fn print(&mut self, line: &Line) -> io::Result<()> {
+        self.operations.push(Operation::Print(line.clone()));
         Ok(())
     }
 

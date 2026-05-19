@@ -1,4 +1,4 @@
-use crate::{Backend, Render, Size, StdoutBackend};
+use crate::{Backend, Line, Render, Size, StdoutBackend};
 use std::io;
 
 pub struct Terminal<B> {
@@ -48,11 +48,11 @@ impl<B: Backend> Terminal<B> {
         self.backend.flush()
     }
 
-    fn rendered_lines(&self) -> Vec<String> {
+    fn rendered_lines(&self) -> Vec<Line> {
         let safe_width = self.size.width().saturating_sub(1);
         self.live_blocks
             .iter()
-            .flat_map(|block| block.render(safe_width))
+            .flat_map(|block| block.render(safe_width).lines().to_vec())
             .collect()
     }
 }
