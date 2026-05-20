@@ -13,16 +13,22 @@ use textwrap::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// Multi-line styled text rendered by terminal blocks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Text {
     lines: Vec<Line>,
 }
 
 impl Text {
+    /// Creates text with no lines.
     pub fn empty() -> Self {
         Self { lines: Vec::new() }
     }
 
+    /// Creates plain text from newline-separated content.
+    ///
+    /// Each line rejects tabs, carriage returns, ANSI escapes, and unsupported
+    /// control characters.
     pub fn from_plain(content: impl AsRef<str>) -> Result<Self, TextError> {
         let lines = content
             .as_ref()
@@ -32,26 +38,31 @@ impl Text {
         Ok(Self { lines })
     }
 
+    /// Creates text from raw terminal text while preserving literal ANSI bytes.
     pub fn from_raw(content: impl AsRef<str>) -> Result<Self, TextError> {
         Ok(Self {
             lines: ansi::parse_text(content.as_ref(), ParseMode::Raw)?,
         })
     }
 
+    /// Creates styled text by parsing ANSI SGR escape sequences.
     pub fn from_ansi(content: impl AsRef<str>) -> Result<Self, TextError> {
         Ok(Self {
             lines: ansi::parse_text(content.as_ref(), ParseMode::Ansi)?,
         })
     }
 
+    /// Creates text from already-validated lines.
     pub fn from_lines(lines: Vec<Line>) -> Self {
         Self { lines }
     }
 
+    /// Returns this text's lines.
     pub fn lines(&self) -> &[Line] {
         &self.lines
     }
 
+    /// Returns the maximum display width of any line.
     pub fn display_width(&self) -> usize {
         self.lines
             .iter()
@@ -60,10 +71,12 @@ impl Text {
             .unwrap_or(0)
     }
 
+    /// Returns the number of display lines.
     pub fn display_height(&self) -> usize {
         self.lines.len()
     }
 
+    /// Wraps text to `width` columns, borrowing when no wrapping is needed.
     pub fn wrap(&self, width: usize) -> Cow<'_, Text> {
         if width == 0 {
             return if self.lines.is_empty() {
@@ -80,6 +93,7 @@ impl Text {
         }
     }
 
+    /// Wraps text to `width` columns, consuming the original value when possible.
     pub fn into_wrapped(self, width: usize) -> Text {
         if width == 0 {
             return Text::empty();

@@ -1,22 +1,38 @@
+//! In-memory backend for tests, examples, and deterministic demonstrations.
+
 use crate::{Backend, Line, Size};
 use std::io;
 
+/// A backend operation recorded by [`FakeBackend`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
+    /// The renderer queried the terminal size.
     QuerySize,
+    /// The renderer hid the cursor.
     HideCursor,
+    /// The renderer showed the cursor.
     ShowCursor,
+    /// The renderer moved to the managed buffer origin.
     MoveToOrigin,
+    /// The renderer moved up by the stored number of rows.
     MoveUp(u16),
+    /// The renderer moved to the stored terminal column.
     MoveToColumn(u16),
+    /// The renderer printed the stored line.
     Print(Line),
+    /// The renderer emitted a newline.
     Newline,
+    /// The renderer cleared the visible buffer.
     Clear,
+    /// The renderer purged scrollback.
     PurgeScrollback,
+    /// The renderer cleared from the cursor down.
     ClearFromCursorDown,
+    /// The renderer flushed pending output.
     Flush,
 }
 
+/// Deterministic backend that records operations instead of touching a terminal.
 #[derive(Debug)]
 pub struct FakeBackend {
     size: Size,
@@ -25,6 +41,7 @@ pub struct FakeBackend {
 }
 
 impl FakeBackend {
+    /// Creates a fake backend that reports `size` to the terminal.
     pub fn new(size: Size) -> Self {
         Self {
             size,
@@ -33,10 +50,12 @@ impl FakeBackend {
         }
     }
 
+    /// Returns the operations recorded so far.
     pub fn operations(&self) -> &[Operation] {
         &self.operations
     }
 
+    /// Makes the next [`Backend::flush`] call fail once.
     pub fn fail_next_flush(&mut self) {
         self.fail_next_flush = true;
     }

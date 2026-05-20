@@ -1,3 +1,5 @@
+//! Crossterm-backed stdout backend for real terminal output.
+
 use crate::{Backend, Color, Line, Modifiers, Size, Style};
 use crossterm::{
     cursor, execute, queue,
@@ -6,15 +8,21 @@ use crossterm::{
 };
 use std::io::{self, Write};
 
+/// Backend that writes terminal operations to a [`Write`] sink.
+///
+/// [`StdoutBackend::stdout`] constructs the normal stdout-backed version. Tests
+/// can use [`StdoutBackend::new`] with another writer to inspect emitted bytes.
 pub struct StdoutBackend<W: Write> {
     writer: W,
 }
 
 impl<W: Write> StdoutBackend<W> {
+    /// Creates a backend around `writer`.
     pub fn new(writer: W) -> Self {
         Self { writer }
     }
 
+    /// Consumes the backend and returns its wrapped writer.
     pub fn into_inner(self) -> W {
         self.writer
     }
@@ -67,6 +75,7 @@ fn to_crossterm_color(color: Color) -> crossterm::style::Color {
 }
 
 impl StdoutBackend<io::Stdout> {
+    /// Creates a backend that writes to process stdout.
     pub fn stdout() -> Self {
         Self::new(io::stdout())
     }

@@ -59,7 +59,7 @@ fn normal_render_prints_pinned_blocks_after_live_blocks() {
 }
 
 #[test]
-fn finish_redraws_live_only_and_restores_cursor() {
+fn finish_removes_pinned_content_with_partial_redraw_and_restores_cursor() {
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
     terminal
         .push_live(Text::from_plain("transcript").unwrap())
@@ -80,8 +80,8 @@ fn finish_redraws_live_only_and_restores_cursor() {
             Operation::Newline,
             Operation::Print(Line::from_plain("status").unwrap()),
             Operation::Flush,
-            Operation::Clear,
-            Operation::Print(Line::from_plain("transcript").unwrap()),
+            Operation::MoveToColumn(0),
+            Operation::ClearFromCursorDown,
             Operation::Newline,
             Operation::MoveToColumn(0),
             Operation::ShowCursor,
@@ -105,7 +105,6 @@ fn finish_is_idempotent_without_extra_blank_lines() {
         &[
             Operation::QuerySize,
             Operation::HideCursor,
-            Operation::Clear,
             Operation::Print(Line::from_plain("transcript").unwrap()),
             Operation::Newline,
             Operation::MoveToColumn(0),

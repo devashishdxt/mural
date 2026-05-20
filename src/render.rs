@@ -1,7 +1,13 @@
 use crate::Text;
 use std::any::{Any, type_name};
 
+/// A value that can render itself into terminal text for a printable width.
+///
+/// Blocks receive the safe printable width chosen by [`Terminal`](crate::Terminal)
+/// and return styled text. Brisk wraps the returned text again if needed before
+/// writing it to the backend.
 pub trait Render {
+    /// Renders this value for `width` terminal columns.
     fn render(&self, width: u16) -> Text;
 }
 

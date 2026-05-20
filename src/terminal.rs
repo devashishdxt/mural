@@ -1,3 +1,5 @@
+//! High-level renderer lifecycle and block management.
+
 use crate::{Backend, Line, Render, Size, StdoutBackend, TerminalError};
 use std::{any::type_name, io};
 
@@ -51,6 +53,11 @@ impl BlockEntry {
     }
 }
 
+/// Renderer that manages live and pinned blocks over a terminal backend.
+///
+/// A terminal starts by hiding the cursor. Callers mutate blocks, call
+/// [`Terminal::render`] when they want output, and call [`Terminal::finish`] to
+/// leave the live transcript behind and restore terminal state.
 pub struct Terminal<B: Backend> {
     backend: B,
     size: Size,
@@ -62,12 +69,14 @@ pub struct Terminal<B: Backend> {
 }
 
 impl Terminal<StdoutBackend<io::Stdout>> {
+    /// Creates a terminal that renders to process stdout.
     pub fn stdout() -> io::Result<Self> {
         Self::new(StdoutBackend::stdout())
     }
 }
 
 impl<B: Backend> Terminal<B> {
+    /// Creates a terminal over `backend` and hides the cursor.
     pub fn new(mut backend: B) -> io::Result<Self> {
         let size = backend.size()?;
         backend.hide_cursor()?;
@@ -99,18 +108,31 @@ impl<B: Backend> Terminal<B> {
         &mut self.backend
     }
 
+    /// Appends an unidentified live block before pinned blocks.
+    ///
+    /// Live blocks form the durable conversation transcript and are left behind
+    /// by [`Terminal::finish`].
     pub fn push_live(&mut self, block: impl Render + 'static) -> io::Result<()> {
         self.ensure_unfinished()?;
         self.live_blocks.push(BlockEntry::unidentified(block));
         Ok(())
     }
 
+    /// Appends an unidentified pinned block after all live blocks.
+    ///
+    /// Pinned blocks are useful for status UI and are removed during
+    /// [`Terminal::finish`].
     pub fn push_pinned(&mut self, block: impl Render + 'static) -> io::Result<()> {
         self.ensure_unfinished()?;
         self.pinned_blocks.push(BlockEntry::unidentified(block));
         Ok(())
     }
 
+    /// Appends an identified live block.
+    ///
+    /// Identified blocks can later be mutated with [`Terminal::live_block_mut`]
+    /// or removed with [`Terminal::remove_live`]. Ids are unique across live and
+    /// pinned regions.
     pub fn insert_live(
         &mut self,
         id: impl Into<String>,
@@ -119,6 +141,10 @@ impl<B: Backend> Terminal<B> {
         self.insert_identified(id, block, BlockRegion::Live)
     }
 
+    /// Appends an identified pinned block.
+    ///
+    /// Identified pinned blocks can later be mutated with
+    /// [`Terminal::pinned_block_mut`] or removed with [`Terminal::remove_pinned`].
     pub fn insert_pinned(
         &mut self,
         id: impl Into<String>,
@@ -127,22 +153,33 @@ impl<B: Backend> Terminal<B> {
         self.insert_identified(id, block, BlockRegion::Pinned)
     }
 
+    /// Returns typed mutable access to an identified live block.
+    ///
+    /// Successful mutable access marks the block dirty so the next render will
+    /// rerender it.
     pub fn live_block_mut<T: 'static>(&mut self, id: &str) -> Result<&mut T, TerminalError> {
         self.block_mut(id, BlockRegion::Live)
     }
 
+    /// Returns typed mutable access to an identified pinned block.
+    ///
+    /// Successful mutable access marks the block dirty so the next render will
+    /// rerender it.
     pub fn pinned_block_mut<T: 'static>(&mut self, id: &str) -> Result<&mut T, TerminalError> {
         self.block_mut(id, BlockRegion::Pinned)
     }
 
+    /// Removes an identified live block.
     pub fn remove_live(&mut self, id: &str) -> Result<(), TerminalError> {
         self.remove_identified(id, BlockRegion::Live)
     }
 
+    /// Removes an identified pinned block.
     pub fn remove_pinned(&mut self, id: &str) -> Result<(), TerminalError> {
         self.remove_identified(id, BlockRegion::Pinned)
     }
 
+    /// Reports whether an identified block is dirty and will be rerendered.
     pub fn is_block_dirty(&self, id: &str) -> Result<bool, TerminalError> {
         self.blocks()
             .find(|block| block.has_id(id))
@@ -160,6 +197,10 @@ impl<B: Backend> Terminal<B> {
         Ok(())
     }
 
+    /// Notifies the terminal about a caller-observed resize.
+    ///
+    /// The notification performs no I/O immediately. The next render uses the
+    /// new safe printable width and performs a full redraw.
     pub fn resize(&mut self, size: Size) -> io::Result<()> {
         self.ensure_unfinished()?;
         self.size = size;
@@ -167,39 +208,28 @@ impl<B: Backend> Terminal<B> {
         Ok(())
     }
 
+    /// Renders dirty or changed live and pinned blocks to the backend.
+    ///
+    /// Brisk writes the smallest safe suffix when possible and falls back to a
+    /// full rewrite for recovery, resize, or changes above the visible viewport.
     pub fn render(&mut self) -> io::Result<()> {
         self.ensure_unfinished()?;
-        let target_lines = self.rendered_lines();
-        let output_result = self
-            .write_target_lines(&target_lines)
-            .and_then(|()| self.backend.flush());
-
-        if let Err(error) = output_result {
-            self.recovery_required = true;
-            return Err(error);
-        }
-
-        self.screen_snapshot = target_lines;
-        self.recovery_required = false;
-        self.mark_rendered_blocks_clean();
-        Ok(())
+        self.render_frame(RenderMode::Normal)
     }
 
+    /// Finishes live rendering and restores terminal state.
+    ///
+    /// Finish renders a final live-only frame, removes pinned UI with the same
+    /// diff/recovery algorithm used by [`Terminal::render`], moves to a fresh
+    /// prompt line, shows the cursor, and flushes. After finish, rendering and
+    /// mutation APIs return lifecycle errors.
     pub fn finish(&mut self) -> io::Result<()> {
         if self.finished {
             self.backend.show_cursor()?;
             return self.backend.flush();
         }
 
-        let lines = self.rendered_live_lines();
-        self.backend.clear()?;
-        self.print_lines_with_separator(&lines, false)?;
-        if !lines.is_empty() {
-            self.backend.newline()?;
-        }
-        self.backend.move_to_column(0)?;
-        self.backend.show_cursor()?;
-        self.backend.flush()?;
+        self.render_frame(RenderMode::Finish)?;
         self.finished = true;
         Ok(())
     }
@@ -325,6 +355,35 @@ impl<B: Backend> Terminal<B> {
         }
     }
 
+    fn render_frame(&mut self, mode: RenderMode) -> io::Result<()> {
+        let target_lines = self.rendered_lines(mode);
+        let output_result = self
+            .write_target_lines(&target_lines)
+            .and_then(|()| self.write_frame_ending(mode))
+            .and_then(|()| self.backend.flush());
+
+        if let Err(error) = output_result {
+            self.recovery_required = true;
+            return Err(error);
+        }
+
+        self.screen_snapshot = target_lines;
+        self.recovery_required = false;
+        self.mark_rendered_blocks_clean();
+        Ok(())
+    }
+
+    fn write_frame_ending(&mut self, mode: RenderMode) -> io::Result<()> {
+        if mode.end_with_newline() {
+            self.backend.newline()?;
+            self.backend.move_to_column(0)?;
+        }
+        if mode.show_cursor() {
+            self.backend.show_cursor()?;
+        }
+        Ok(())
+    }
+
     fn print_lines_with_separator(
         &mut self,
         lines: &[Line],
@@ -382,19 +441,18 @@ impl<B: Backend> Terminal<B> {
         lines_up >= usize::from(self.size.height())
     }
 
-    fn rendered_lines(&mut self) -> Vec<Line> {
+    fn rendered_lines(&mut self, mode: RenderMode) -> Vec<Line> {
         let safe_width = self.safe_width();
-        self.blocks_mut()
-            .flat_map(|block| block.rendered_lines(safe_width))
-            .collect()
-    }
-
-    fn rendered_live_lines(&mut self) -> Vec<Line> {
-        let safe_width = self.safe_width();
-        self.live_blocks
-            .iter_mut()
-            .flat_map(|block| block.rendered_lines(safe_width))
-            .collect()
+        if mode.render_pinned() {
+            self.blocks_mut()
+                .flat_map(|block| block.rendered_lines(safe_width))
+                .collect()
+        } else {
+            self.live_blocks
+                .iter_mut()
+                .flat_map(|block| block.rendered_lines(safe_width))
+                .collect()
+        }
     }
 
     fn safe_width(&self) -> u16 {
@@ -425,6 +483,26 @@ fn first_changed_line(previous: &[Line], next: &[Line]) -> Option<usize> {
         .zip(next)
         .position(|(previous, next)| previous != next)
         .or_else(|| (previous.len() != next.len()).then_some(shared_len))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderMode {
+    Normal,
+    Finish,
+}
+
+impl RenderMode {
+    fn render_pinned(self) -> bool {
+        matches!(self, RenderMode::Normal)
+    }
+
+    fn end_with_newline(self) -> bool {
+        matches!(self, RenderMode::Finish)
+    }
+
+    fn show_cursor(self) -> bool {
+        matches!(self, RenderMode::Finish)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
