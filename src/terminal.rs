@@ -259,14 +259,9 @@ impl<B: Backend> Terminal<B> {
         expected_region: BlockRegion,
     ) -> Result<(), TerminalError> {
         self.ensure_unfinished_for_mutation()?;
-        self.ensure_block_region(id, expected_region)?;
+        let index = self.block_index_in_region(id, expected_region)?;
 
-        let blocks = self.blocks_in_region_mut(expected_region);
-        let index = blocks
-            .iter()
-            .position(|block| block.has_id(id))
-            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })?;
-        blocks.remove(index);
+        self.blocks_in_region_mut(expected_region).remove(index);
         Ok(())
     }
 
@@ -276,27 +271,28 @@ impl<B: Backend> Terminal<B> {
         expected_region: BlockRegion,
     ) -> Result<&mut T, TerminalError> {
         self.ensure_unfinished_for_mutation()?;
-        self.ensure_block_region(id, expected_region)?;
+        let index = self.block_index_in_region(id, expected_region)?;
+        let block = &mut self.blocks_in_region_mut(expected_region)[index];
+        let actual_type = block.block.type_name();
 
-        let block = self
-            .blocks_in_region_mut(expected_region)
-            .iter_mut()
-            .find(|block| block.has_id(id))
-            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })?;
         if !block.block.as_any().is::<T>() {
             return Err(TerminalError::WrongBlockType {
                 id: id.to_owned(),
                 expected: type_name::<T>(),
-                actual: block.block.type_name(),
+                actual: actual_type,
             });
         }
 
         block.dirty = true;
-        Ok(block
+        block
             .block
             .as_any_mut()
             .downcast_mut::<T>()
-            .expect("type was checked before downcast"))
+            .ok_or_else(|| TerminalError::WrongBlockType {
+                id: id.to_owned(),
+                expected: type_name::<T>(),
+                actual: actual_type,
+            })
     }
 
     fn blocks(&self) -> impl Iterator<Item = &BlockEntry> {
@@ -309,6 +305,13 @@ impl<B: Backend> Terminal<B> {
             .chain(self.pinned_blocks.iter_mut())
     }
 
+    fn blocks_in_region(&self, region: BlockRegion) -> &[BlockEntry] {
+        match region {
+            BlockRegion::Live => &self.live_blocks,
+            BlockRegion::Pinned => &self.pinned_blocks,
+        }
+    }
+
     fn blocks_in_region_mut(&mut self, region: BlockRegion) -> &mut Vec<BlockEntry> {
         match region {
             BlockRegion::Live => &mut self.live_blocks,
@@ -316,29 +319,28 @@ impl<B: Backend> Terminal<B> {
         }
     }
 
-    fn region_containing_id(&self, id: &str) -> Option<BlockRegion> {
-        if self.live_blocks.iter().any(|block| block.has_id(id)) {
-            Some(BlockRegion::Live)
-        } else if self.pinned_blocks.iter().any(|block| block.has_id(id)) {
-            Some(BlockRegion::Pinned)
-        } else {
-            None
-        }
-    }
-
-    fn ensure_block_region(
+    fn block_index_in_region(
         &self,
         id: &str,
         expected_region: BlockRegion,
-    ) -> Result<(), TerminalError> {
-        let actual_region = self
-            .region_containing_id(id)
-            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })?;
-        if actual_region != expected_region {
+    ) -> Result<usize, TerminalError> {
+        if let Some(index) = self
+            .blocks_in_region(expected_region)
+            .iter()
+            .position(|block| block.has_id(id))
+        {
+            return Ok(index);
+        }
+
+        if self
+            .blocks_in_region(expected_region.opposite())
+            .iter()
+            .any(|block| block.has_id(id))
+        {
             return Err(expected_region.wrong_region_error(id));
         }
 
-        Ok(())
+        Err(TerminalError::MissingBlockId { id: id.to_owned() })
     }
 
     fn ensure_unfinished(&self) -> io::Result<()> {
@@ -519,6 +521,13 @@ enum BlockRegion {
 }
 
 impl BlockRegion {
+    fn opposite(self) -> Self {
+        match self {
+            BlockRegion::Live => BlockRegion::Pinned,
+            BlockRegion::Pinned => BlockRegion::Live,
+        }
+    }
+
     fn wrong_region_error(self, id: &str) -> TerminalError {
         match self {
             BlockRegion::Live => TerminalError::ExpectedLiveBlock { id: id.to_owned() },

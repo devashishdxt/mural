@@ -159,8 +159,8 @@ impl SourceRange {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StyledFragment {
-    word: SourceRange,
-    whitespace: SourceRange,
+    word_range: SourceRange,
+    whitespace_range: SourceRange,
     penalty: String,
     width: usize,
     whitespace_width: usize,
@@ -168,30 +168,30 @@ struct StyledFragment {
 }
 
 impl StyledFragment {
-    fn hard_wrap_piece(source: &str, word: SourceRange) -> Self {
+    fn hard_wrap_piece(source: &str, word_range: SourceRange) -> Self {
         Self {
-            word,
-            whitespace: SourceRange::new(word.end, word.end),
+            word_range,
+            whitespace_range: SourceRange::new(word_range.end, word_range.end),
             penalty: String::new(),
-            width: word.display_width(source),
+            width: word_range.display_width(source),
             whitespace_width: 0,
             penalty_width: 0,
         }
     }
 
-    fn hard_wrap_tail(source: &str, word: SourceRange, original: &StyledFragment) -> Self {
+    fn hard_wrap_tail(source: &str, word_range: SourceRange, original: &StyledFragment) -> Self {
         Self {
-            word,
-            whitespace: original.whitespace,
+            word_range,
+            whitespace_range: original.whitespace_range,
             penalty: original.penalty.clone(),
-            width: word.display_width(source),
+            width: word_range.display_width(source),
             whitespace_width: original.whitespace_width,
             penalty_width: original.penalty_width,
         }
     }
 
     fn needs_hard_wrap(&self, width: usize) -> bool {
-        self.width > width && !self.word.is_empty()
+        self.width > width && !self.word_range.is_empty()
     }
 }
 
@@ -217,13 +217,13 @@ struct StyledGrapheme<'a> {
 }
 
 #[derive(Default)]
-struct LineBuilder {
+struct StyledLineBuilder {
     spans: Vec<Span>,
     content: String,
     style: Style,
 }
 
-impl LineBuilder {
+impl StyledLineBuilder {
     fn append_range(&mut self, range: SourceRange, styled_graphemes: &[StyledGrapheme<'_>]) {
         for grapheme in styled_graphemes
             .iter()
@@ -256,9 +256,13 @@ impl LineBuilder {
     }
 }
 
+fn empty_line() -> Line {
+    Line::from_spans(Vec::new())
+}
+
 fn wrap_line(line: &Line, width: usize) -> Vec<Line> {
     if line.spans().is_empty() {
-        return vec![Line::from_spans(Vec::new())];
+        return vec![empty_line()];
     }
 
     let source = line.plain_content();
@@ -279,10 +283,11 @@ fn styled_fragments(source: &str, width: usize) -> Vec<StyledFragment> {
         &options.word_splitter,
     );
     let mut fragments = Vec::new();
-    let mut cursor = 0;
+    let mut search_start = 0;
 
     for word in words {
-        let fragment = styled_fragment_from_word(source, &mut cursor, word);
+        let (fragment, next_search_start) = styled_fragment_from_word(source, search_start, word);
+        search_start = next_search_start;
         fragments.extend(split_fragment_at_grapheme_boundaries(
             source, fragment, width,
         ));
@@ -291,23 +296,29 @@ fn styled_fragments(source: &str, width: usize) -> Vec<StyledFragment> {
     fragments
 }
 
-fn styled_fragment_from_word(source: &str, cursor: &mut usize, word: Word<'_>) -> StyledFragment {
-    let word_start = source[*cursor..]
+fn styled_fragment_from_word(
+    source: &str,
+    search_start: usize,
+    word: Word<'_>,
+) -> (StyledFragment, usize) {
+    let word_start = source[search_start..]
         .find(word.word)
-        .map(|offset| *cursor + offset)
-        .unwrap_or(*cursor);
+        .map(|offset| search_start + offset)
+        .unwrap_or(search_start);
     let word_range = SourceRange::new(word_start, word_start + word.word.len());
     let whitespace_range = SourceRange::new(word_range.end, word_range.end + word.whitespace.len());
-    *cursor = whitespace_range.end;
 
-    StyledFragment {
-        word: word_range,
-        whitespace: whitespace_range,
-        penalty: word.penalty.to_owned(),
-        width: word_range.display_width(source),
-        whitespace_width: whitespace_range.display_width(source),
-        penalty_width: UnicodeWidthStr::width(word.penalty),
-    }
+    (
+        StyledFragment {
+            word_range,
+            whitespace_range,
+            penalty: word.penalty.to_owned(),
+            width: word_range.display_width(source),
+            whitespace_width: whitespace_range.display_width(source),
+            penalty_width: UnicodeWidthStr::width(word.penalty),
+        },
+        whitespace_range.end,
+    )
 }
 
 fn split_fragment_at_grapheme_boundaries(
@@ -320,11 +331,12 @@ fn split_fragment_at_grapheme_boundaries(
     }
 
     let mut fragments = Vec::new();
-    let mut chunk_start = fragment.word.start;
+    let word_range = fragment.word_range;
+    let mut chunk_start = word_range.start;
     let mut chunk_width = 0;
 
-    for (offset, grapheme) in fragment.word.text(source).grapheme_indices(true) {
-        let grapheme_start = fragment.word.start + offset;
+    for (offset, grapheme) in word_range.text(source).grapheme_indices(true) {
+        let grapheme_start = word_range.start + offset;
         let grapheme_end = grapheme_start + grapheme.len();
         let grapheme_width = UnicodeWidthStr::width(grapheme);
 
@@ -338,10 +350,10 @@ fn split_fragment_at_grapheme_boundaries(
         }
 
         chunk_width += grapheme_width;
-        if grapheme_end == fragment.word.end {
+        if grapheme_end == word_range.end {
             fragments.push(StyledFragment::hard_wrap_tail(
                 source,
-                SourceRange::new(chunk_start, fragment.word.end),
+                SourceRange::new(chunk_start, word_range.end),
                 &fragment,
             ));
         }
@@ -361,16 +373,16 @@ fn line_from_fragments(
     styled_graphemes: &[StyledGrapheme<'_>],
 ) -> Line {
     let Some((last, leading)) = fragments.split_last() else {
-        return Line::from_spans(Vec::new());
+        return empty_line();
     };
 
-    let mut line = LineBuilder::default();
+    let mut line = StyledLineBuilder::default();
     for fragment in leading {
-        line.append_range(fragment.word, styled_graphemes);
-        line.append_range(fragment.whitespace, styled_graphemes);
+        line.append_range(fragment.word_range, styled_graphemes);
+        line.append_range(fragment.whitespace_range, styled_graphemes);
     }
 
-    line.append_range(last.word, styled_graphemes);
+    line.append_range(last.word_range, styled_graphemes);
     if !last.penalty.is_empty() {
         line.append_text(
             &last.penalty,
@@ -388,7 +400,7 @@ fn trailing_fragment_style(
     styled_graphemes
         .iter()
         .rev()
-        .find(|grapheme| fragment.word.contains(grapheme.range))
+        .find(|grapheme| fragment.word_range.contains(grapheme.range))
         .map(|grapheme| grapheme.style)
         .unwrap_or_default()
 }

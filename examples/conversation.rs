@@ -105,8 +105,7 @@ impl Render for Status {
             StatusState::Working => {
                 let frame = self.animation_frame.get();
                 self.animation_frame.set(frame + 1);
-                let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-                    [frame % 10];
+                let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][frame % 10];
                 Text::from_plain(format!("status: working {spinner}")).unwrap()
             }
             StatusState::BatchingResize => {
