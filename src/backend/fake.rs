@@ -6,10 +6,12 @@ pub enum Operation {
     QuerySize,
     HideCursor,
     ShowCursor,
+    MoveUp(u16),
     MoveToColumn(u16),
     Print(Line),
     Newline,
     Clear,
+    ClearFromCursorDown,
     Flush,
 }
 
@@ -17,6 +19,7 @@ pub enum Operation {
 pub struct FakeBackend {
     size: Size,
     operations: Vec<Operation>,
+    fail_next_flush: bool,
 }
 
 impl FakeBackend {
@@ -24,11 +27,16 @@ impl FakeBackend {
         Self {
             size,
             operations: Vec::new(),
+            fail_next_flush: false,
         }
     }
 
     pub fn operations(&self) -> &[Operation] {
         &self.operations
+    }
+
+    pub fn fail_next_flush(&mut self) {
+        self.fail_next_flush = true;
     }
 }
 
@@ -45,6 +53,11 @@ impl Backend for FakeBackend {
 
     fn show_cursor(&mut self) -> io::Result<()> {
         self.operations.push(Operation::ShowCursor);
+        Ok(())
+    }
+
+    fn move_up(&mut self, lines: u16) -> io::Result<()> {
+        self.operations.push(Operation::MoveUp(lines));
         Ok(())
     }
 
@@ -68,8 +81,20 @@ impl Backend for FakeBackend {
         Ok(())
     }
 
+    fn clear_from_cursor_down(&mut self) -> io::Result<()> {
+        self.operations.push(Operation::ClearFromCursorDown);
+        Ok(())
+    }
+
     fn flush(&mut self) -> io::Result<()> {
         self.operations.push(Operation::Flush);
+        if self.fail_next_flush {
+            self.fail_next_flush = false;
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "injected flush failure",
+            ));
+        }
         Ok(())
     }
 }

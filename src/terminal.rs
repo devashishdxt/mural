@@ -1,4 +1,4 @@
-use crate::{Backend, Line, Render, Size, StdoutBackend, TerminalError, Text};
+use crate::{Backend, Line, Render, Size, StdoutBackend, TerminalError};
 use std::{any::type_name, io};
 
 use crate::render::RenderBlock;
@@ -7,6 +7,8 @@ struct BlockEntry {
     id: Option<String>,
     block: Box<dyn RenderBlock>,
     dirty: bool,
+    cached_width: Option<u16>,
+    cached_lines: Vec<Line>,
 }
 
 impl BlockEntry {
@@ -15,6 +17,8 @@ impl BlockEntry {
             id: None,
             block: Box::new(block),
             dirty: true,
+            cached_width: None,
+            cached_lines: Vec::new(),
         }
     }
 
@@ -23,11 +27,23 @@ impl BlockEntry {
             id: Some(id),
             block: Box::new(block),
             dirty: true,
+            cached_width: None,
+            cached_lines: Vec::new(),
         }
     }
 
-    fn render(&self, width: u16) -> Text {
-        self.block.render(width)
+    fn rendered_lines(&mut self, width: u16) -> Vec<Line> {
+        if self.dirty || self.cached_width != Some(width) {
+            self.cached_lines = self
+                .block
+                .render(width)
+                .into_wrapped(usize::from(width))
+                .lines()
+                .to_vec();
+            self.cached_width = Some(width);
+        }
+
+        self.cached_lines.clone()
     }
 
     fn has_id(&self, id: &str) -> bool {
@@ -42,6 +58,7 @@ pub struct Terminal<B> {
     pinned_blocks: Vec<BlockEntry>,
     finished: bool,
     full_redraw_required: bool,
+    screen_snapshot: Vec<Line>,
 }
 
 impl Terminal<StdoutBackend<io::Stdout>> {
@@ -61,6 +78,7 @@ impl<B: Backend> Terminal<B> {
             pinned_blocks: Vec::new(),
             finished: false,
             full_redraw_required: false,
+            screen_snapshot: Vec::new(),
         })
     }
 
@@ -128,9 +146,12 @@ impl<B: Backend> Terminal<B> {
         let lines = self.rendered_lines();
         if self.full_redraw_required {
             self.backend.clear()?;
+            self.print_lines(&lines)?;
+        } else if lines != self.screen_snapshot {
+            self.redraw_changed_lines(&lines)?;
         }
-        self.print_lines(&lines)?;
         self.backend.flush()?;
+        self.screen_snapshot = lines;
         self.full_redraw_required = false;
         self.mark_rendered_blocks_clean();
         Ok(())
@@ -282,8 +303,16 @@ impl<B: Backend> Terminal<B> {
     }
 
     fn print_lines(&mut self, lines: &[Line]) -> io::Result<()> {
+        self.print_lines_with_separator(lines, false)
+    }
+
+    fn print_lines_with_separator(
+        &mut self,
+        lines: &[Line],
+        leading_separator: bool,
+    ) -> io::Result<()> {
         for (index, line) in lines.iter().enumerate() {
-            if index > 0 {
+            if (leading_separator && index == 0) || index > 0 {
                 self.backend.newline()?;
             }
             self.backend.print(line)?;
@@ -291,24 +320,37 @@ impl<B: Backend> Terminal<B> {
         Ok(())
     }
 
-    fn rendered_lines(&self) -> Vec<Line> {
-        self.render_blocks(self.blocks())
+    fn redraw_changed_lines(&mut self, lines: &[Line]) -> io::Result<()> {
+        let Some(first_changed) = first_changed_line(&self.screen_snapshot, lines) else {
+            return Ok(());
+        };
+        let previous_len = self.screen_snapshot.len();
+
+        if first_changed < previous_len {
+            let lines_up = previous_len - 1 - first_changed;
+            if lines_up > 0 {
+                self.backend.move_up(lines_up as u16)?;
+            }
+            self.backend.move_to_column(0)?;
+            self.backend.clear_from_cursor_down()?;
+            self.print_lines(&lines[first_changed..])
+        } else {
+            self.print_lines_with_separator(&lines[first_changed..], previous_len > 0)
+        }
     }
 
-    fn rendered_live_lines(&self) -> Vec<Line> {
-        self.render_blocks(self.live_blocks.iter())
-    }
-
-    fn render_blocks<'a>(&self, blocks: impl Iterator<Item = &'a BlockEntry>) -> Vec<Line> {
+    fn rendered_lines(&mut self) -> Vec<Line> {
         let safe_width = self.size.width().saturating_sub(1);
-        blocks
-            .flat_map(|block| {
-                block
-                    .render(safe_width)
-                    .into_wrapped(usize::from(safe_width))
-                    .lines()
-                    .to_vec()
-            })
+        self.blocks_mut()
+            .flat_map(|block| block.rendered_lines(safe_width))
+            .collect()
+    }
+
+    fn rendered_live_lines(&mut self) -> Vec<Line> {
+        let safe_width = self.size.width().saturating_sub(1);
+        self.live_blocks
+            .iter_mut()
+            .flat_map(|block| block.rendered_lines(safe_width))
             .collect()
     }
 
@@ -317,6 +359,17 @@ impl<B: Backend> Terminal<B> {
             block.dirty = false;
         }
     }
+}
+
+fn first_changed_line(previous: &[Line], next: &[Line]) -> Option<usize> {
+    let shared_len = previous.len().min(next.len());
+    for index in 0..shared_len {
+        if previous[index] != next[index] {
+            return Some(index);
+        }
+    }
+
+    (previous.len() != next.len()).then_some(shared_len)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
