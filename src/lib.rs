@@ -20,7 +20,7 @@
 //! - [`terminal`] for the renderer lifecycle and live/pinned block management.
 //! - [`text`] for validated plain, raw, ANSI, styled, and wrapped text.
 //! - [`backend`] for stdout integration, fake backends, and custom terminal I/O.
-//! - [`blocks`] for pre-built renderable blocks such as [`Hr`].
+//! - [`blocks`] for pre-built renderable blocks such as [`Hr`] and [`ListItem`].
 //! - [`error`] for typed lifecycle and identified-block errors.
 //!
 //! See `examples/conversation.rs` for a runnable end-to-end conversation model.
@@ -57,7 +57,7 @@ pub mod terminal;
 pub mod text;
 
 pub use backend::{Backend, FakeBackend, Operation, StdoutBackend};
-pub use blocks::{Hr, hr};
+pub use blocks::{Hr, ListItem, hr, list_item};
 pub use error::TerminalError;
 pub use render::Render;
 pub use size::Size;
