@@ -147,6 +147,13 @@ impl<B: Backend> Terminal<B> {
         Ok(())
     }
 
+    pub fn resize(&mut self, size: Size) -> io::Result<()> {
+        self.ensure_unfinished()?;
+        self.size = size;
+        self.recovery_required = true;
+        Ok(())
+    }
+
     pub fn render(&mut self) -> io::Result<()> {
         self.ensure_unfinished()?;
         let target_lines = self.rendered_lines();
