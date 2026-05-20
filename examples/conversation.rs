@@ -1,4 +1,4 @@
-use brisk::{Render, Size, Terminal, Text};
+use brisk::{Color, Hr, Render, Size, Style, Terminal, Text};
 use std::{cell::Cell, thread, time::Duration};
 
 const FRAME_DELAY: Duration = Duration::from_millis(700);
@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // are useful for status, token counts, or progress indicators.
     terminal.push_live(Text::from_plain("user: explain Brisk in one sentence")?)?;
     terminal.insert_live("assistant", Text::from_plain("assistant: thinking…")?)?;
+    terminal.push_pinned(Hr::new().style(Style::new().fg(Color::BrightBlack).dim()))?;
     terminal.insert_pinned("status", Status::queued())?;
     render_frame(&mut terminal)?;
 
