@@ -33,7 +33,7 @@ impl BlockEntry {
     }
 
     fn rendered_lines(&mut self, width: u16) -> Vec<Line> {
-        if self.dirty || self.cached_width != Some(width) {
+        if self.is_effectively_dirty() || self.cached_width != Some(width) {
             self.cached_lines = self
                 .block
                 .render(width)
@@ -44,6 +44,10 @@ impl BlockEntry {
         }
 
         self.cached_lines.clone()
+    }
+
+    fn is_effectively_dirty(&self) -> bool {
+        self.dirty || self.block.render_every_frame()
     }
 
     fn has_id(&self, id: &str) -> bool {
@@ -181,7 +185,7 @@ impl<B: Backend> Terminal<B> {
     pub fn is_block_dirty(&self, id: &str) -> Result<bool, TerminalError> {
         self.blocks()
             .find(|block| block.has_id(id))
-            .map(|block| block.dirty)
+            .map(BlockEntry::is_effectively_dirty)
             .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })
     }
 
