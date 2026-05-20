@@ -40,12 +40,6 @@ fn line_and_span_constructors_reject_structural_content() {
         Line::from_plain("hello\nworld").unwrap_err(),
         TextError::StructuralContent
     );
-
-    let unchecked_span = unsafe { Span::new_unchecked("hello\nworld", Style::new()) };
-    assert_eq!(unchecked_span.content(), "hello\nworld");
-
-    let unchecked_line = unsafe { Line::new_unchecked(vec![unchecked_span.clone()]) };
-    assert_eq!(unchecked_line.spans(), &[unchecked_span]);
 }
 
 #[test]

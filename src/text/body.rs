@@ -123,10 +123,6 @@ impl SourceRange {
         Self { start, end }
     }
 
-    fn at(offset: usize) -> Self {
-        Self::new(offset, offset)
-    }
-
     fn is_empty(self) -> bool {
         self.start == self.end
     }
@@ -150,7 +146,7 @@ impl StyledFragment {
     fn hard_wrap_piece(source: &str, word: SourceRange) -> Self {
         Self {
             word,
-            whitespace: SourceRange::at(word.end),
+            whitespace: SourceRange::new(word.end, word.end),
             penalty: String::new(),
             width: UnicodeWidthStr::width(word.text(source)),
             whitespace_width: 0,
@@ -230,13 +226,12 @@ impl LineBuilder {
             return;
         }
 
-        self.spans.push(
-            Span::new(
+        self.spans.push(unsafe {
+            Span::new_unchecked(
                 std::mem::take(&mut self.content),
                 self.style.unwrap_or_default(),
             )
-            .expect("wrapped span content preserves invariants"),
-        );
+        });
     }
 }
 

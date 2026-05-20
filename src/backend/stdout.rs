@@ -35,19 +35,9 @@ impl<W: Write> StdoutBackend<W> {
             (Modifiers::UNDERLINE, Attribute::Underlined),
             (Modifiers::REVERSED, Attribute::Reverse),
         ] {
-            self.write_modifier(modifiers, modifier, attribute)?;
-        }
-        Ok(())
-    }
-
-    fn write_modifier(
-        &mut self,
-        modifiers: Modifiers,
-        modifier: Modifiers,
-        attribute: Attribute,
-    ) -> io::Result<()> {
-        if modifiers.contains(modifier) {
-            queue!(self.writer, SetAttribute(attribute))?;
+            if modifiers.contains(modifier) {
+                queue!(self.writer, SetAttribute(attribute))?;
+            }
         }
         Ok(())
     }

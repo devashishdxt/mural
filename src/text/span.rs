@@ -1,3 +1,5 @@
+use std::hint::unreachable_unchecked;
+
 use super::{
     Line, Style, TextError,
     ansi::{self, ParseMode},
@@ -29,17 +31,17 @@ impl Span {
         single_span(ansi::parse_text(content.as_ref(), ParseMode::Ansi)?)
     }
 
-    /// Creates a span without validating content invariants.
+    /// Creates a span without fallible content validation.
     ///
     /// # Safety
     /// Callers must ensure the content does not contain structural terminal
     /// content such as newlines, tabs, carriage returns, ANSI escapes, or
-    /// unsupported control characters unless they intentionally accept the
-    /// resulting renderer behavior.
+    /// unsupported control characters. Passing invalid content is undefined
+    /// behavior.
     pub unsafe fn new_unchecked(content: impl Into<String>, style: Style) -> Self {
-        Self {
-            content: content.into(),
-            style,
+        match Self::new(content, style) {
+            Ok(this) => this,
+            Err(_) => unsafe { unreachable_unchecked() },
         }
     }
 
@@ -58,14 +60,14 @@ impl Span {
 
 fn single_span(mut lines: Vec<Line>) -> Result<Span, TextError> {
     if lines.len() != 1 {
-        return Err(TextError::multiple_lines());
+        return Err(TextError::MultipleLines);
     }
 
     let mut spans = lines.remove(0).spans().to_vec();
     match spans.len() {
         0 => Ok(Span::new("", Style::new())?),
         1 => Ok(spans.remove(0)),
-        _ => Err(TextError::multiple_styles()),
+        _ => Err(TextError::MultipleStyles),
     }
 }
 
@@ -74,7 +76,7 @@ pub(crate) fn validate_structural_content(content: &str) -> Result<(), TextError
         .chars()
         .any(|ch| ch == '\n' || ch == '\r' || ch == '\t' || ch == '\x1b' || ch.is_control())
     {
-        return Err(TextError::structural_content());
+        return Err(TextError::StructuralContent);
     }
 
     Ok(())

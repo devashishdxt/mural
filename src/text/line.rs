@@ -33,15 +33,6 @@ impl Line {
         Self { spans }
     }
 
-    /// Creates a line without validating span content invariants.
-    ///
-    /// # Safety
-    /// Callers must ensure spans do not contain structural content unless they
-    /// intentionally accept the resulting renderer behavior.
-    pub unsafe fn new_unchecked(spans: Vec<Span>) -> Self {
-        Self { spans }
-    }
-
     pub fn spans(&self) -> &[Span] {
         &self.spans
     }
@@ -57,7 +48,7 @@ impl Line {
 
 fn single_line(mut lines: Vec<Line>) -> Result<Line, TextError> {
     if lines.len() != 1 {
-        return Err(TextError::multiple_lines());
+        return Err(TextError::MultipleLines);
     }
     Ok(lines.remove(0))
 }

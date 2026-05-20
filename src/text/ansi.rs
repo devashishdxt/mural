@@ -35,10 +35,10 @@ fn ansi_line(content: &str) -> Result<Line, TextError> {
         builder.push(
             sanitize_text(&block.text().ansi_strip()),
             brisk_style(block.style()),
-        )?;
+        );
     }
 
-    Ok(Line::from_spans(builder.finish()?))
+    Ok(Line::from_spans(builder.finish()))
 }
 
 #[derive(Default)]
@@ -49,33 +49,31 @@ struct SpanBuilder {
 }
 
 impl SpanBuilder {
-    fn push(&mut self, content: String, style: Style) -> Result<(), TextError> {
+    fn push(&mut self, content: String, style: Style) {
         if content.is_empty() {
-            return Ok(());
+            return;
         }
 
         if !self.content.is_empty() && self.style != style {
-            self.flush()?;
+            self.flush();
         }
 
         self.style = style;
         self.content.push_str(&content);
-        Ok(())
     }
 
-    fn finish(mut self) -> Result<Vec<Span>, TextError> {
-        self.flush()?;
-        Ok(self.spans)
+    fn finish(mut self) -> Vec<Span> {
+        self.flush();
+        self.spans
     }
 
-    fn flush(&mut self) -> Result<(), TextError> {
+    fn flush(&mut self) {
         if self.content.is_empty() {
-            return Ok(());
+            return;
         }
 
         self.spans
-            .push(Span::new(std::mem::take(&mut self.content), self.style)?);
-        Ok(())
+            .push(unsafe { Span::new_unchecked(std::mem::take(&mut self.content), self.style) });
     }
 }
 
