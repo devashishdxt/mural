@@ -51,7 +51,7 @@ impl BlockEntry {
     }
 }
 
-pub struct Terminal<B> {
+pub struct Terminal<B: Backend> {
     backend: B,
     size: Size,
     live_blocks: Vec<BlockEntry>,
@@ -82,10 +82,19 @@ impl<B: Backend> Terminal<B> {
         })
     }
 
+    /// Returns the backend used by this terminal.
+    ///
+    /// This is an escape hatch for advanced callers that need to inspect backend-specific
+    /// state. Prefer the renderer APIs for normal terminal output.
     pub fn backend(&self) -> &B {
         &self.backend
     }
 
+    /// Returns mutable access to the backend used by this terminal.
+    ///
+    /// Direct backend writes can invalidate the renderer's cached screen assumptions. After
+    /// writing through this escape hatch, call [`Terminal::force_full_redraw`] before the next
+    /// [`Terminal::render`] so the renderer recovers with a full rewrite.
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
     }
@@ -141,6 +150,10 @@ impl<B: Backend> Terminal<B> {
             .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })
     }
 
+    /// Forces the next render to recover by rewriting the full managed screen buffer.
+    ///
+    /// Use this after direct writes through [`Terminal::backend_mut`] or after any external
+    /// terminal interaction that may have invalidated the renderer's cached screen snapshot.
     pub fn force_full_redraw(&mut self) -> io::Result<()> {
         self.ensure_unfinished()?;
         self.recovery_required = true;
@@ -391,6 +404,15 @@ impl<B: Backend> Terminal<B> {
     fn mark_rendered_blocks_clean(&mut self) {
         for block in self.blocks_mut() {
             block.dirty = false;
+        }
+    }
+}
+
+impl<B: Backend> Drop for Terminal<B> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.backend.show_cursor();
+            let _ = self.backend.flush();
         }
     }
 }
