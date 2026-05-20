@@ -6,11 +6,13 @@ pub enum Operation {
     QuerySize,
     HideCursor,
     ShowCursor,
+    MoveToOrigin,
     MoveUp(u16),
     MoveToColumn(u16),
     Print(Line),
     Newline,
     Clear,
+    PurgeScrollback,
     ClearFromCursorDown,
     Flush,
 }
@@ -56,6 +58,11 @@ impl Backend for FakeBackend {
         Ok(())
     }
 
+    fn move_to_origin(&mut self) -> io::Result<()> {
+        self.operations.push(Operation::MoveToOrigin);
+        Ok(())
+    }
+
     fn move_up(&mut self, lines: u16) -> io::Result<()> {
         self.operations.push(Operation::MoveUp(lines));
         Ok(())
@@ -78,6 +85,11 @@ impl Backend for FakeBackend {
 
     fn clear(&mut self) -> io::Result<()> {
         self.operations.push(Operation::Clear);
+        Ok(())
+    }
+
+    fn purge_scrollback(&mut self) -> io::Result<()> {
+        self.operations.push(Operation::PurgeScrollback);
         Ok(())
     }
 

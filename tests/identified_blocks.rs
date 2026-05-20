@@ -221,7 +221,9 @@ fn removed_identified_live_blocks_disappear_on_next_render() {
             Operation::Newline,
             Operation::Print(Line::from_plain("status").unwrap()),
             Operation::Flush,
-            Operation::Clear,
+            Operation::MoveUp(1),
+            Operation::MoveToColumn(0),
+            Operation::ClearFromCursorDown,
             Operation::Print(Line::from_plain("status").unwrap()),
             Operation::Flush,
         ]
@@ -251,8 +253,8 @@ fn removed_identified_pinned_blocks_disappear_on_next_render() {
             Operation::Newline,
             Operation::Print(Line::from_plain("status").unwrap()),
             Operation::Flush,
-            Operation::Clear,
-            Operation::Print(Line::from_plain("transcript").unwrap()),
+            Operation::MoveToColumn(0),
+            Operation::ClearFromCursorDown,
             Operation::Flush,
         ]
     );

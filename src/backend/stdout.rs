@@ -86,6 +86,10 @@ impl<W: Write> Backend for StdoutBackend<W> {
         execute!(self.writer, cursor::Show)
     }
 
+    fn move_to_origin(&mut self) -> io::Result<()> {
+        execute!(self.writer, cursor::MoveTo(0, 0))
+    }
+
     fn move_up(&mut self, lines: u16) -> io::Result<()> {
         execute!(self.writer, cursor::MoveUp(lines))
     }
@@ -112,6 +116,10 @@ impl<W: Write> Backend for StdoutBackend<W> {
 
     fn clear(&mut self) -> io::Result<()> {
         queue!(self.writer, terminal::Clear(terminal::ClearType::All))
+    }
+
+    fn purge_scrollback(&mut self) -> io::Result<()> {
+        queue!(self.writer, terminal::Clear(terminal::ClearType::Purge))
     }
 
     fn clear_from_cursor_down(&mut self) -> io::Result<()> {

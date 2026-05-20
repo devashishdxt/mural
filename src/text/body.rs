@@ -388,4 +388,3 @@ fn styled_graphemes(line: &Line) -> Vec<StyledGrapheme<'_>> {
 fn range_contains(outer: SourceRange, inner: SourceRange) -> bool {
     inner.start >= outer.start && inner.end <= outer.end
 }
-

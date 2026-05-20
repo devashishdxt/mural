@@ -57,7 +57,7 @@ pub struct Terminal<B> {
     live_blocks: Vec<BlockEntry>,
     pinned_blocks: Vec<BlockEntry>,
     finished: bool,
-    full_redraw_required: bool,
+    recovery_required: bool,
     screen_snapshot: Vec<Line>,
 }
 
@@ -77,7 +77,7 @@ impl<B: Backend> Terminal<B> {
             live_blocks: Vec::new(),
             pinned_blocks: Vec::new(),
             finished: false,
-            full_redraw_required: false,
+            recovery_required: false,
             screen_snapshot: Vec::new(),
         })
     }
@@ -141,18 +141,26 @@ impl<B: Backend> Terminal<B> {
             .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })
     }
 
+    pub fn force_full_redraw(&mut self) -> io::Result<()> {
+        self.ensure_unfinished()?;
+        self.recovery_required = true;
+        Ok(())
+    }
+
     pub fn render(&mut self) -> io::Result<()> {
         self.ensure_unfinished()?;
-        let lines = self.rendered_lines();
-        if self.full_redraw_required {
-            self.backend.clear()?;
-            self.print_lines_with_separator(&lines, false)?;
-        } else if lines != self.screen_snapshot {
-            self.redraw_changed_lines(&lines)?;
+        let target_lines = self.rendered_lines();
+        let output_result = self
+            .write_target_lines(&target_lines)
+            .and_then(|()| self.backend.flush());
+
+        if let Err(error) = output_result {
+            self.recovery_required = true;
+            return Err(error);
         }
-        self.backend.flush()?;
-        self.screen_snapshot = lines;
-        self.full_redraw_required = false;
+
+        self.screen_snapshot = target_lines;
+        self.recovery_required = false;
         self.mark_rendered_blocks_clean();
         Ok(())
     }
@@ -214,7 +222,6 @@ impl<B: Backend> Terminal<B> {
             .position(|block| block.has_id(id))
             .expect("region_containing_id confirmed the block exists");
         blocks.remove(index);
-        self.full_redraw_required = true;
         Ok(())
     }
 
@@ -312,23 +319,47 @@ impl<B: Backend> Terminal<B> {
         Ok(())
     }
 
-    fn redraw_changed_lines(&mut self, lines: &[Line]) -> io::Result<()> {
-        let Some(first_changed) = first_changed_line(&self.screen_snapshot, lines) else {
+    fn write_target_lines(&mut self, target_lines: &[Line]) -> io::Result<()> {
+        if self.recovery_required {
+            self.recover_with_full_rewrite(target_lines)
+        } else if target_lines != self.screen_snapshot {
+            self.write_changed_lines(target_lines)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn recover_with_full_rewrite(&mut self, target_lines: &[Line]) -> io::Result<()> {
+        self.backend.move_to_origin()?;
+        self.backend.clear()?;
+        self.backend.purge_scrollback()?;
+        self.print_lines_with_separator(target_lines, false)
+    }
+
+    fn write_changed_lines(&mut self, target_lines: &[Line]) -> io::Result<()> {
+        let Some(first_changed) = first_changed_line(&self.screen_snapshot, target_lines) else {
             return Ok(());
         };
         let previous_len = self.screen_snapshot.len();
 
         if first_changed < previous_len {
             let lines_up = previous_len - 1 - first_changed;
+            if self.changed_line_is_above_viewport(lines_up) {
+                return self.recover_with_full_rewrite(target_lines);
+            }
             if lines_up > 0 {
                 self.backend.move_up(lines_up as u16)?;
             }
             self.backend.move_to_column(0)?;
             self.backend.clear_from_cursor_down()?;
-            self.print_lines_with_separator(&lines[first_changed..], false)
+            self.print_lines_with_separator(&target_lines[first_changed..], false)
         } else {
-            self.print_lines_with_separator(&lines[first_changed..], previous_len > 0)
+            self.print_lines_with_separator(&target_lines[first_changed..], previous_len > 0)
         }
+    }
+
+    fn changed_line_is_above_viewport(&self, lines_up: usize) -> bool {
+        lines_up >= usize::from(self.size.height())
     }
 
     fn rendered_lines(&mut self) -> Vec<Line> {

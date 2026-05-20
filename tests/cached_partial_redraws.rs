@@ -122,7 +122,7 @@ fn changed_blocks_redraw_from_the_earliest_changed_visual_line() {
 }
 
 #[test]
-fn failed_flush_does_not_update_the_snapshot_or_clear_dirty_flags() {
+fn failed_flush_does_not_update_the_snapshot_or_clear_dirty_flags_and_forces_recovery() {
     let render_count = Rc::new(Cell::new(0));
     let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
     terminal
@@ -149,8 +149,9 @@ fn failed_flush_does_not_update_the_snapshot_or_clear_dirty_flags() {
     assert_eq!(
         &terminal.backend().operations()[after_failed_render..],
         &[
-            Operation::MoveToColumn(0),
-            Operation::ClearFromCursorDown,
+            Operation::MoveToOrigin,
+            Operation::Clear,
+            Operation::PurgeScrollback,
             Operation::Print(Line::from_plain("two").unwrap()),
             Operation::Flush,
         ]
