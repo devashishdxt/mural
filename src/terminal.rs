@@ -15,18 +15,16 @@ struct BlockEntry {
 
 impl BlockEntry {
     fn unidentified(block: impl Render + 'static) -> Self {
-        Self {
-            id: None,
-            block: Box::new(block),
-            dirty: true,
-            cached_width: None,
-            cached_lines: Vec::new(),
-        }
+        Self::new(None, block)
     }
 
     fn identified(id: String, block: impl Render + 'static) -> Self {
+        Self::new(Some(id), block)
+    }
+
+    fn new(id: Option<String>, block: impl Render + 'static) -> Self {
         Self {
-            id: Some(id),
+            id,
             block: Box::new(block),
             dirty: true,
             cached_width: None,
@@ -246,10 +244,8 @@ impl<B: Backend> Terminal<B> {
             return Err(TerminalError::DuplicateBlockId { id });
         }
 
-        match region {
-            BlockRegion::Live => self.live_blocks.push(BlockEntry::identified(id, block)),
-            BlockRegion::Pinned => self.pinned_blocks.push(BlockEntry::identified(id, block)),
-        }
+        self.blocks_in_region_mut(region)
+            .push(BlockEntry::identified(id, block));
         Ok(())
     }
 
@@ -259,18 +255,13 @@ impl<B: Backend> Terminal<B> {
         expected_region: BlockRegion,
     ) -> Result<(), TerminalError> {
         self.ensure_unfinished_for_mutation()?;
-        let actual_region = self
-            .region_containing_id(id)
-            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })?;
-        if actual_region != expected_region {
-            return Err(expected_region.expected_block_error(id));
-        }
+        self.ensure_block_region(id, expected_region)?;
 
         let blocks = self.blocks_in_region_mut(expected_region);
         let index = blocks
             .iter()
             .position(|block| block.has_id(id))
-            .expect("region_containing_id confirmed the block exists");
+            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })?;
         blocks.remove(index);
         Ok(())
     }
@@ -281,18 +272,13 @@ impl<B: Backend> Terminal<B> {
         expected_region: BlockRegion,
     ) -> Result<&mut T, TerminalError> {
         self.ensure_unfinished_for_mutation()?;
-        let actual_region = self
-            .region_containing_id(id)
-            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })?;
-        if actual_region != expected_region {
-            return Err(expected_region.expected_block_error(id));
-        }
+        self.ensure_block_region(id, expected_region)?;
 
         let block = self
             .blocks_in_region_mut(expected_region)
             .iter_mut()
             .find(|block| block.has_id(id))
-            .expect("region_containing_id confirmed the block exists");
+            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })?;
         if !block.block.as_any().is::<T>() {
             return Err(TerminalError::WrongBlockType {
                 id: id.to_owned(),
@@ -336,6 +322,21 @@ impl<B: Backend> Terminal<B> {
         }
     }
 
+    fn ensure_block_region(
+        &self,
+        id: &str,
+        expected_region: BlockRegion,
+    ) -> Result<(), TerminalError> {
+        let actual_region = self
+            .region_containing_id(id)
+            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })?;
+        if actual_region != expected_region {
+            return Err(expected_region.wrong_region_error(id));
+        }
+
+        Ok(())
+    }
+
     fn ensure_unfinished(&self) -> io::Result<()> {
         if self.finished {
             Err(io::Error::new(
@@ -357,12 +358,8 @@ impl<B: Backend> Terminal<B> {
 
     fn render_frame(&mut self, mode: RenderMode) -> io::Result<()> {
         let target_lines = self.rendered_lines(mode);
-        let output_result = self
-            .write_target_lines(&target_lines)
-            .and_then(|()| self.write_frame_ending(mode))
-            .and_then(|()| self.backend.flush());
 
-        if let Err(error) = output_result {
+        if let Err(error) = self.write_frame(&target_lines, mode) {
             self.recovery_required = true;
             return Err(error);
         }
@@ -371,6 +368,12 @@ impl<B: Backend> Terminal<B> {
         self.recovery_required = false;
         self.mark_rendered_blocks_clean();
         Ok(())
+    }
+
+    fn write_frame(&mut self, target_lines: &[Line], mode: RenderMode) -> io::Result<()> {
+        self.write_target_lines(target_lines)?;
+        self.write_frame_ending(mode)?;
+        self.backend.flush()
     }
 
     fn write_frame_ending(&mut self, mode: RenderMode) -> io::Result<()> {
@@ -512,7 +515,7 @@ enum BlockRegion {
 }
 
 impl BlockRegion {
-    fn expected_block_error(self, id: &str) -> TerminalError {
+    fn wrong_region_error(self, id: &str) -> TerminalError {
         match self {
             BlockRegion::Live => TerminalError::ExpectedLiveBlock { id: id.to_owned() },
             BlockRegion::Pinned => TerminalError::ExpectedPinnedBlock { id: id.to_owned() },

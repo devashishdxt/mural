@@ -66,20 +66,22 @@ impl Span {
     }
 }
 
-fn single_span(mut lines: Vec<Line>) -> Result<Span, TextError> {
-    if lines.len() != 1 {
-        return Err(TextError::MultipleLines);
+fn single_span(lines: Vec<Line>) -> Result<Span, TextError> {
+    let [line] = lines.try_into().map_err(|_| TextError::MultipleLines)?;
+    let mut spans = line.into_spans().into_iter();
+
+    let Some(span) = spans.next() else {
+        return Span::plain("");
+    };
+
+    if spans.next().is_some() {
+        return Err(TextError::MultipleStyles);
     }
 
-    let mut spans = lines.remove(0).spans().to_vec();
-    match spans.len() {
-        0 => Ok(Span::new("", Style::new())?),
-        1 => Ok(spans.remove(0)),
-        _ => Err(TextError::MultipleStyles),
-    }
+    Ok(span)
 }
 
-pub(crate) fn validate_structural_content(content: &str) -> Result<(), TextError> {
+fn validate_structural_content(content: &str) -> Result<(), TextError> {
     if content
         .chars()
         .any(|ch| ch == '\n' || ch == '\r' || ch == '\t' || ch == '\x1b' || ch.is_control())

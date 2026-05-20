@@ -8,6 +8,14 @@ use crossterm::{
 };
 use std::io::{self, Write};
 
+const MODIFIER_ATTRIBUTES: [(Modifiers, Attribute); 5] = [
+    (Modifiers::BOLD, Attribute::Bold),
+    (Modifiers::DIM, Attribute::Dim),
+    (Modifiers::ITALIC, Attribute::Italic),
+    (Modifiers::UNDERLINE, Attribute::Underlined),
+    (Modifiers::REVERSED, Attribute::Reverse),
+];
+
 /// Backend that writes terminal operations to a [`Write`] sink.
 ///
 /// [`StdoutBackend::stdout`] constructs the normal stdout-backed version. Tests
@@ -36,13 +44,7 @@ impl<W: Write> StdoutBackend<W> {
         }
 
         let modifiers = style.modifiers();
-        for (modifier, attribute) in [
-            (Modifiers::BOLD, Attribute::Bold),
-            (Modifiers::DIM, Attribute::Dim),
-            (Modifiers::ITALIC, Attribute::Italic),
-            (Modifiers::UNDERLINE, Attribute::Underlined),
-            (Modifiers::REVERSED, Attribute::Reverse),
-        ] {
+        for (modifier, attribute) in MODIFIER_ATTRIBUTES {
             if modifiers.contains(modifier) {
                 queue!(self.writer, SetAttribute(attribute))?;
             }
@@ -112,7 +114,7 @@ impl<W: Write> Backend for StdoutBackend<W> {
             let style = span.style();
             self.write_style_prefix(style)?;
             self.writer.write_all(span.content().as_bytes())?;
-            if style != Style::new() {
+            if !style.is_plain() {
                 queue!(self.writer, ResetColor)?;
             }
         }

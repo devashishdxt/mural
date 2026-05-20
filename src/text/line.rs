@@ -1,7 +1,6 @@
 use super::{
-    Span, Style, TextError,
+    Span, TextError,
     ansi::{self, ParseMode},
-    validate_structural_content,
 };
 
 /// One terminal display line made of styled spans.
@@ -14,11 +13,10 @@ impl Line {
     /// Creates an unstyled line from plain content.
     pub fn from_plain(content: impl Into<String>) -> Result<Self, TextError> {
         let content = content.into();
-        validate_structural_content(&content)?;
         let spans = if content.is_empty() {
             Vec::new()
         } else {
-            vec![Span::new(content, Style::new())?]
+            vec![Span::plain(content)?]
         };
         Ok(Self { spans })
     }
@@ -43,6 +41,10 @@ impl Line {
         &self.spans
     }
 
+    pub(super) fn into_spans(self) -> Vec<Span> {
+        self.spans
+    }
+
     /// Returns this line's text content without style information.
     pub fn plain_content(&self) -> String {
         self.spans.iter().map(Span::content).collect()
@@ -54,9 +56,7 @@ impl Line {
     }
 }
 
-fn single_line(mut lines: Vec<Line>) -> Result<Line, TextError> {
-    if lines.len() != 1 {
-        return Err(TextError::MultipleLines);
-    }
-    Ok(lines.remove(0))
+fn single_line(lines: Vec<Line>) -> Result<Line, TextError> {
+    let [line] = lines.try_into().map_err(|_| TextError::MultipleLines)?;
+    Ok(line)
 }

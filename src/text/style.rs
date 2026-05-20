@@ -66,6 +66,10 @@ impl Style {
         self.bg
     }
 
+    pub(crate) fn is_plain(&self) -> bool {
+        self.fg.is_none() && self.bg.is_none() && self.modifiers.is_empty()
+    }
+
     /// Returns the active style modifiers.
     pub fn modifiers(&self) -> Modifiers {
         self.modifiers

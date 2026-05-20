@@ -144,6 +144,14 @@ impl SourceRange {
     fn text(self, source: &str) -> &str {
         &source[self.start..self.end]
     }
+
+    fn display_width(self, source: &str) -> usize {
+        UnicodeWidthStr::width(self.text(source))
+    }
+
+    fn contains(self, other: SourceRange) -> bool {
+        other.start >= self.start && other.end <= self.end
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,7 +170,7 @@ impl StyledFragment {
             word,
             whitespace: SourceRange::new(word.end, word.end),
             penalty: String::new(),
-            width: UnicodeWidthStr::width(word.text(source)),
+            width: word.display_width(source),
             whitespace_width: 0,
             penalty_width: 0,
         }
@@ -173,7 +181,7 @@ impl StyledFragment {
             word,
             whitespace: original.whitespace,
             penalty: original.penalty.clone(),
-            width: UnicodeWidthStr::width(word.text(source)),
+            width: word.display_width(source),
             whitespace_width: original.whitespace_width,
             penalty_width: original.penalty_width,
         }
@@ -209,24 +217,24 @@ struct StyledGrapheme<'a> {
 struct LineBuilder {
     spans: Vec<Span>,
     content: String,
-    style: Option<Style>,
+    style: Style,
 }
 
 impl LineBuilder {
     fn append_range(&mut self, range: SourceRange, styled_graphemes: &[StyledGrapheme<'_>]) {
         for grapheme in styled_graphemes
             .iter()
-            .filter(|grapheme| range_contains(range, grapheme.range))
+            .filter(|grapheme| range.contains(grapheme.range))
         {
             self.append_text(grapheme.content, grapheme.style);
         }
     }
 
     fn append_text(&mut self, text: &str, style: Style) {
-        if self.style != Some(style) {
+        if !self.content.is_empty() && self.style != style {
             self.flush_span();
-            self.style = Some(style);
         }
+        self.style = style;
         self.content.push_str(text);
     }
 
@@ -240,12 +248,8 @@ impl LineBuilder {
             return;
         }
 
-        self.spans.push(unsafe {
-            Span::new_unchecked(
-                std::mem::take(&mut self.content),
-                self.style.unwrap_or_default(),
-            )
-        });
+        self.spans
+            .push(unsafe { Span::new_unchecked(std::mem::take(&mut self.content), self.style) });
     }
 }
 
@@ -267,14 +271,14 @@ fn wrap_line(line: &Line, width: usize) -> Vec<Line> {
 
 fn styled_fragments(source: &str, width: usize) -> Vec<StyledFragment> {
     let options = Options::new(width).break_words(false);
-    let split_words = split_words(
+    let words = split_words(
         options.word_separator.find_words(source),
         &options.word_splitter,
     );
     let mut fragments = Vec::new();
     let mut cursor = 0;
 
-    for word in split_words {
+    for word in words {
         let fragment = styled_fragment_from_word(source, &mut cursor, word);
         fragments.extend(split_fragment_at_grapheme_boundaries(
             source, fragment, width,
@@ -297,8 +301,8 @@ fn styled_fragment_from_word(source: &str, cursor: &mut usize, word: Word<'_>) -
         word: word_range,
         whitespace: whitespace_range,
         penalty: word.penalty.to_owned(),
-        width: UnicodeWidthStr::width(word_range.text(source)),
-        whitespace_width: UnicodeWidthStr::width(whitespace_range.text(source)),
+        width: word_range.display_width(source),
+        whitespace_width: whitespace_range.display_width(source),
         penalty_width: UnicodeWidthStr::width(word.penalty),
     }
 }
@@ -365,17 +369,23 @@ fn line_from_fragments(
 
     line.append_range(last.word, styled_graphemes);
     if !last.penalty.is_empty() {
-        line.append_text(&last.penalty, fragment_style(last, styled_graphemes));
+        line.append_text(
+            &last.penalty,
+            trailing_fragment_style(last, styled_graphemes),
+        );
     }
 
     line.finish()
 }
 
-fn fragment_style(fragment: &StyledFragment, styled_graphemes: &[StyledGrapheme<'_>]) -> Style {
+fn trailing_fragment_style(
+    fragment: &StyledFragment,
+    styled_graphemes: &[StyledGrapheme<'_>],
+) -> Style {
     styled_graphemes
         .iter()
         .rev()
-        .find(|grapheme| range_contains(fragment.word, grapheme.range))
+        .find(|grapheme| fragment.word.contains(grapheme.range))
         .map(|grapheme| grapheme.style)
         .unwrap_or_default()
 }
@@ -397,8 +407,4 @@ fn styled_graphemes(line: &Line) -> Vec<StyledGrapheme<'_>> {
     }
 
     graphemes
-}
-
-fn range_contains(outer: SourceRange, inner: SourceRange) -> bool {
-    inner.start >= outer.start && inner.end <= outer.end
 }

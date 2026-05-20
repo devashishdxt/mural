@@ -34,7 +34,7 @@ fn ansi_line(content: &str) -> Result<Line, TextError> {
     for block in get_blocks(content) {
         builder.push(
             sanitize_text(&block.text().ansi_strip()),
-            brisk_style(block.style()),
+            style_from_ansi(block.style()),
         );
     }
 
@@ -77,35 +77,35 @@ impl SpanBuilder {
     }
 }
 
-fn brisk_style(style: &AnsiStyle) -> Style {
-    let mut brisk = Style::new();
+fn style_from_ansi(style: &AnsiStyle) -> Style {
+    let mut converted = Style::new();
 
     if let Some(color) = style.foreground() {
-        brisk = brisk.fg(brisk_color(color));
+        converted = converted.fg(color_from_ansi(color));
     }
     if let Some(color) = style.background() {
-        brisk = brisk.bg(brisk_color(color));
+        converted = converted.bg(color_from_ansi(color));
     }
     if style.is_bold() {
-        brisk = brisk.bold();
+        converted = converted.bold();
     }
     if style.is_faint() {
-        brisk = brisk.dim();
+        converted = converted.dim();
     }
     if style.is_italic() {
-        brisk = brisk.italic();
+        converted = converted.italic();
     }
     if style.is_underline() {
-        brisk = brisk.underline();
+        converted = converted.underline();
     }
     if style.is_inverse() {
-        brisk = brisk.reversed();
+        converted = converted.reversed();
     }
 
-    brisk
+    converted
 }
 
-fn brisk_color(color: AnsiColor) -> Color {
+fn color_from_ansi(color: AnsiColor) -> Color {
     match color {
         AnsiColor::Black => Color::Black,
         AnsiColor::Red => Color::Red,

@@ -19,6 +19,10 @@ impl Modifiers {
         self.0 & other.0 == other.0
     }
 
+    pub(crate) fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
     pub(crate) fn insert(&mut self, other: Self) {
         self.0 |= other.0;
     }
