@@ -85,7 +85,7 @@ fn wrapping_uses_textwrap_break_points_for_whitespace_hyphens_and_slashes() {
         ]
     );
     assert_eq!(
-        Text::from_raw("a\tb").unwrap().wrap(5).lines(),
+        Text::from_raw_lossy("a\tb").unwrap().wrap(5).lines(),
         &[
             Line::from_plain("a").unwrap(),
             Line::from_plain("b").unwrap()

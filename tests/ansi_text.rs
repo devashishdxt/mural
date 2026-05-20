@@ -62,8 +62,8 @@ fn ansi_text_construction_supports_bright_colors_and_modifiers() {
 }
 
 #[test]
-fn raw_text_construction_strips_ansi_and_controls_without_styling() {
-    let text = Text::from_raw(
+fn raw_lossy_text_construction_strips_ansi_and_controls_without_styling() {
+    let text = Text::from_raw_lossy(
         "hi\t\x1b[31mred\x1b[0m\x07\x1b]8;;https://example.com\x07link\x1b]8;;\x07\r\nnext",
     )
     .unwrap();

@@ -21,8 +21,11 @@ impl Line {
         Ok(Self { spans })
     }
 
-    /// Creates a line from raw text while preserving literal ANSI bytes.
-    pub fn from_raw(content: impl AsRef<str>) -> Result<Self, TextError> {
+    /// Creates a plain line from raw terminal text by lossily sanitizing unsafe content.
+    ///
+    /// ANSI escape sequences and unsupported control characters are stripped,
+    /// and tabs are replaced with spaces.
+    pub fn from_raw_lossy(content: impl AsRef<str>) -> Result<Self, TextError> {
         single_line(ansi::parse_text(content.as_ref(), ParseMode::Raw)?)
     }
 

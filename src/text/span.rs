@@ -26,8 +26,11 @@ impl Span {
         Self::new(content, Style::new())
     }
 
-    /// Creates a span from raw text while preserving literal ANSI bytes.
-    pub fn from_raw(content: impl AsRef<str>) -> Result<Self, TextError> {
+    /// Creates a plain span from raw terminal text by lossily sanitizing unsafe content.
+    ///
+    /// ANSI escape sequences and unsupported control characters are stripped,
+    /// and tabs are replaced with spaces.
+    pub fn from_raw_lossy(content: impl AsRef<str>) -> Result<Self, TextError> {
         single_span(ansi::parse_text(content.as_ref(), ParseMode::Raw)?)
     }
 
@@ -36,14 +39,14 @@ impl Span {
         single_span(ansi::parse_text(content.as_ref(), ParseMode::Ansi)?)
     }
 
-    /// Creates a span without fallible content validation.
+    /// Creates a span without returning validation errors.
     ///
     /// # Safety
     /// Callers must ensure the content does not contain structural terminal
     /// content such as newlines, tabs, carriage returns, ANSI escapes, or
-    /// unsupported control characters. Passing invalid content is undefined
-    /// behavior.
-    pub unsafe fn new_unchecked(content: impl Into<String>, style: Style) -> Self {
+    /// unsupported control characters. Passing invalid content violates this
+    /// function's safety preconditions and may trigger undefined behavior.
+    pub(crate) unsafe fn new_unchecked(content: impl Into<String>, style: Style) -> Self {
         match Self::new(content, style) {
             Ok(this) => this,
             Err(_) => unsafe { unreachable_unchecked() },

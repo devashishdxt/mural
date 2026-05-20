@@ -91,8 +91,8 @@ impl<B: Backend> Terminal<B> {
 
     /// Returns the backend used by this terminal.
     ///
-    /// This is an escape hatch for advanced callers that need to inspect backend-specific
-    /// state. Prefer the renderer APIs for normal terminal output.
+    /// This is primarily useful for tests and backend-specific inspection.
+    /// Prefer the renderer APIs for normal terminal output.
     pub fn backend(&self) -> &B {
         &self.backend
     }

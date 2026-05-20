@@ -9,6 +9,10 @@ pub struct Size {
 
 impl Size {
     /// Creates a size from terminal `width` columns and `height` rows.
+    ///
+    /// Zero dimensions are supported for transient resize states. A zero-width
+    /// terminal renders no text, and width `1` leaves a safe printable width of
+    /// zero because Brisk reserves one column to avoid unwanted wrapping.
     pub fn new(width: u16, height: u16) -> Self {
         Self { width, height }
     }
