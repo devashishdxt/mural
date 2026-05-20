@@ -104,6 +104,43 @@ fn identified_blocks_report_specific_typed_api_errors() {
 }
 
 #[test]
+fn removing_identified_blocks_reports_specific_typed_api_errors() {
+    let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
+    terminal
+        .insert_live("transcript", Text::from_plain("hello").unwrap())
+        .unwrap();
+    terminal
+        .insert_pinned("status", Text::from_plain("ready").unwrap())
+        .unwrap();
+
+    assert_eq!(
+        terminal.remove_live("missing"),
+        Err(TerminalError::MissingBlockId {
+            id: "missing".into()
+        })
+    );
+    assert_eq!(
+        terminal.remove_pinned("transcript"),
+        Err(TerminalError::ExpectedPinnedBlock {
+            id: "transcript".into(),
+        })
+    );
+    assert_eq!(
+        terminal.remove_live("status"),
+        Err(TerminalError::ExpectedLiveBlock {
+            id: "status".into(),
+        })
+    );
+
+    terminal.finish().unwrap();
+
+    assert_eq!(
+        terminal.remove_live("transcript"),
+        Err(TerminalError::Finished)
+    );
+}
+
+#[test]
 fn heterogeneous_identified_blocks_do_not_require_send_or_sync() {
     #[derive(Debug)]
     struct LocalOnlyBlock {
@@ -159,6 +196,66 @@ fn mutable_access_marks_the_block_dirty_as_a_rendering_hint() {
         .value = 2;
 
     assert_eq!(terminal.is_block_dirty("transcript"), Ok(true));
+}
+
+#[test]
+fn removed_identified_live_blocks_disappear_on_next_render() {
+    let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
+    terminal
+        .insert_live("transcript", Text::from_plain("transcript").unwrap())
+        .unwrap();
+    terminal
+        .insert_pinned("status", Text::from_plain("status").unwrap())
+        .unwrap();
+
+    terminal.render().unwrap();
+    terminal.remove_live("transcript").unwrap();
+    terminal.render().unwrap();
+
+    assert_eq!(
+        terminal.backend().operations(),
+        &[
+            Operation::QuerySize,
+            Operation::HideCursor,
+            Operation::Print(Line::from_plain("transcript").unwrap()),
+            Operation::Newline,
+            Operation::Print(Line::from_plain("status").unwrap()),
+            Operation::Flush,
+            Operation::Clear,
+            Operation::Print(Line::from_plain("status").unwrap()),
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn removed_identified_pinned_blocks_disappear_on_next_render() {
+    let mut terminal = Terminal::new(FakeBackend::new(Size::new(80, 24))).unwrap();
+    terminal
+        .insert_live("transcript", Text::from_plain("transcript").unwrap())
+        .unwrap();
+    terminal
+        .insert_pinned("status", Text::from_plain("status").unwrap())
+        .unwrap();
+
+    terminal.render().unwrap();
+    terminal.remove_pinned("status").unwrap();
+    terminal.render().unwrap();
+
+    assert_eq!(
+        terminal.backend().operations(),
+        &[
+            Operation::QuerySize,
+            Operation::HideCursor,
+            Operation::Print(Line::from_plain("transcript").unwrap()),
+            Operation::Newline,
+            Operation::Print(Line::from_plain("status").unwrap()),
+            Operation::Flush,
+            Operation::Clear,
+            Operation::Print(Line::from_plain("transcript").unwrap()),
+            Operation::Flush,
+        ]
+    );
 }
 
 #[test]

@@ -41,6 +41,7 @@ pub struct Terminal<B> {
     live_blocks: Vec<BlockEntry>,
     pinned_blocks: Vec<BlockEntry>,
     finished: bool,
+    full_redraw_required: bool,
 }
 
 impl Terminal<StdoutBackend<io::Stdout>> {
@@ -59,6 +60,7 @@ impl<B: Backend> Terminal<B> {
             live_blocks: Vec::new(),
             pinned_blocks: Vec::new(),
             finished: false,
+            full_redraw_required: false,
         })
     }
 
@@ -106,6 +108,14 @@ impl<B: Backend> Terminal<B> {
         self.block_mut(id, BlockRegion::Pinned)
     }
 
+    pub fn remove_live(&mut self, id: &str) -> Result<(), TerminalError> {
+        self.remove_identified(id, BlockRegion::Live)
+    }
+
+    pub fn remove_pinned(&mut self, id: &str) -> Result<(), TerminalError> {
+        self.remove_identified(id, BlockRegion::Pinned)
+    }
+
     pub fn is_block_dirty(&self, id: &str) -> Result<bool, TerminalError> {
         self.blocks()
             .find(|block| block.has_id(id))
@@ -116,8 +126,12 @@ impl<B: Backend> Terminal<B> {
     pub fn render(&mut self) -> io::Result<()> {
         self.ensure_unfinished()?;
         let lines = self.rendered_lines();
+        if self.full_redraw_required {
+            self.backend.clear()?;
+        }
         self.print_lines(&lines)?;
         self.backend.flush()?;
+        self.full_redraw_required = false;
         self.mark_rendered_blocks_clean();
         Ok(())
     }
@@ -157,6 +171,29 @@ impl<B: Backend> Terminal<B> {
             BlockRegion::Live => self.live_blocks.push(BlockEntry::identified(id, block)),
             BlockRegion::Pinned => self.pinned_blocks.push(BlockEntry::identified(id, block)),
         }
+        Ok(())
+    }
+
+    fn remove_identified(
+        &mut self,
+        id: &str,
+        expected_region: BlockRegion,
+    ) -> Result<(), TerminalError> {
+        self.ensure_unfinished_for_mutation()?;
+        let actual_region = self
+            .region_containing_id(id)
+            .ok_or_else(|| TerminalError::MissingBlockId { id: id.to_owned() })?;
+        if actual_region != expected_region {
+            return Err(expected_region.expected_block_error(id));
+        }
+
+        let blocks = self.blocks_in_region_mut(expected_region);
+        let index = blocks
+            .iter()
+            .position(|block| block.has_id(id))
+            .expect("region_containing_id confirmed the block exists");
+        blocks.remove(index);
+        self.full_redraw_required = true;
         Ok(())
     }
 
