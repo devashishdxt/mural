@@ -340,18 +340,22 @@ impl<B: Backend> Terminal<B> {
     }
 
     fn rendered_lines(&mut self) -> Vec<Line> {
-        let safe_width = self.size.width().saturating_sub(1);
+        let safe_width = self.safe_width();
         self.blocks_mut()
             .flat_map(|block| block.rendered_lines(safe_width))
             .collect()
     }
 
     fn rendered_live_lines(&mut self) -> Vec<Line> {
-        let safe_width = self.size.width().saturating_sub(1);
+        let safe_width = self.safe_width();
         self.live_blocks
             .iter_mut()
             .flat_map(|block| block.rendered_lines(safe_width))
             .collect()
+    }
+
+    fn safe_width(&self) -> u16 {
+        self.size.width().saturating_sub(1)
     }
 
     fn mark_rendered_blocks_clean(&mut self) {
@@ -363,13 +367,12 @@ impl<B: Backend> Terminal<B> {
 
 fn first_changed_line(previous: &[Line], next: &[Line]) -> Option<usize> {
     let shared_len = previous.len().min(next.len());
-    for index in 0..shared_len {
-        if previous[index] != next[index] {
-            return Some(index);
-        }
-    }
 
-    (previous.len() != next.len()).then_some(shared_len)
+    previous
+        .iter()
+        .zip(next)
+        .position(|(previous, next)| previous != next)
+        .or_else(|| (previous.len() != next.len()).then_some(shared_len))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

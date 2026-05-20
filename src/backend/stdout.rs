@@ -28,11 +28,16 @@ impl<W: Write> StdoutBackend<W> {
         }
 
         let modifiers = style.modifiers();
-        self.write_modifier(modifiers, Modifiers::BOLD, Attribute::Bold)?;
-        self.write_modifier(modifiers, Modifiers::DIM, Attribute::Dim)?;
-        self.write_modifier(modifiers, Modifiers::ITALIC, Attribute::Italic)?;
-        self.write_modifier(modifiers, Modifiers::UNDERLINE, Attribute::Underlined)?;
-        self.write_modifier(modifiers, Modifiers::REVERSED, Attribute::Reverse)
+        for (modifier, attribute) in [
+            (Modifiers::BOLD, Attribute::Bold),
+            (Modifiers::DIM, Attribute::Dim),
+            (Modifiers::ITALIC, Attribute::Italic),
+            (Modifiers::UNDERLINE, Attribute::Underlined),
+            (Modifiers::REVERSED, Attribute::Reverse),
+        ] {
+            self.write_modifier(modifiers, modifier, attribute)?;
+        }
+        Ok(())
     }
 
     fn write_modifier(

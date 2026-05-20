@@ -90,10 +90,7 @@ impl Backend for FakeBackend {
         self.operations.push(Operation::Flush);
         if self.fail_next_flush {
             self.fail_next_flush = false;
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "injected flush failure",
-            ));
+            return Err(io::Error::other("injected flush failure"));
         }
         Ok(())
     }

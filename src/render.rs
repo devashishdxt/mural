@@ -1,5 +1,5 @@
 use crate::Text;
-use std::{any::Any, any::type_name};
+use std::any::{Any, type_name};
 
 pub trait Render {
     fn render(&self, width: u16) -> Text;
