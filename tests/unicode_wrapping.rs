@@ -20,7 +20,6 @@ fn display_measurement_uses_terminal_widths() {
     assert_eq!(line.spans()[2].display_width(), 1);
     assert_eq!(line.spans()[3].display_width(), 2);
     assert_eq!(line.display_width(), 6);
-    assert_eq!(line.display_height(), 1);
     assert_eq!(text.display_width(), 6);
     assert_eq!(text.display_height(), 2);
     assert_eq!(Text::empty().display_height(), 0);

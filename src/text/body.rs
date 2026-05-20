@@ -97,7 +97,12 @@ impl Text {
     }
 
     fn wrapped(&self, width: usize) -> Text {
-        Text::from_lines(wrap_lines(&self.lines, width))
+        Text::from_lines(
+            self.lines
+                .iter()
+                .flat_map(|line| wrap_line(line, width))
+                .collect(),
+        )
     }
 }
 
@@ -129,10 +134,6 @@ impl SourceRange {
     fn text(self, source: &str) -> &str {
         &source[self.start..self.end]
     }
-
-    fn width(self, source: &str) -> usize {
-        UnicodeWidthStr::width(self.text(source))
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +152,7 @@ impl StyledFragment {
             word,
             whitespace: SourceRange::at(word.end),
             penalty: String::new(),
-            width: word.width(source),
+            width: UnicodeWidthStr::width(word.text(source)),
             whitespace_width: 0,
             penalty_width: 0,
         }
@@ -162,7 +163,7 @@ impl StyledFragment {
             word,
             whitespace: original.whitespace,
             penalty: original.penalty.clone(),
-            width: word.width(source),
+            width: UnicodeWidthStr::width(word.text(source)),
             whitespace_width: original.whitespace_width,
             penalty_width: original.penalty_width,
         }
@@ -239,16 +240,9 @@ impl LineBuilder {
     }
 }
 
-fn wrap_lines(lines: &[Line], width: usize) -> Vec<Line> {
-    lines
-        .iter()
-        .flat_map(|line| wrap_line(line, width))
-        .collect()
-}
-
 fn wrap_line(line: &Line, width: usize) -> Vec<Line> {
     if line.spans().is_empty() {
-        return vec![empty_line()];
+        return vec![Line::from_spans(Vec::new())];
     }
 
     let source = line.plain_content();
@@ -282,7 +276,10 @@ fn styled_fragments(source: &str, width: usize) -> Vec<StyledFragment> {
 }
 
 fn styled_fragment_from_word(source: &str, cursor: &mut usize, word: Word<'_>) -> StyledFragment {
-    let word_start = find_fragment(source, *cursor, word.word).unwrap_or(*cursor);
+    let word_start = source[*cursor..]
+        .find(word.word)
+        .map(|offset| *cursor + offset)
+        .unwrap_or(*cursor);
     let word_range = SourceRange::new(word_start, word_start + word.word.len());
     let whitespace_range = SourceRange::new(word_range.end, word_range.end + word.whitespace.len());
     *cursor = whitespace_range.end;
@@ -291,8 +288,8 @@ fn styled_fragment_from_word(source: &str, cursor: &mut usize, word: Word<'_>) -
         word: word_range,
         whitespace: whitespace_range,
         penalty: word.penalty.to_owned(),
-        width: word_range.width(source),
-        whitespace_width: whitespace_range.width(source),
+        width: UnicodeWidthStr::width(word_range.text(source)),
+        whitespace_width: UnicodeWidthStr::width(whitespace_range.text(source)),
         penalty_width: UnicodeWidthStr::width(word.penalty),
     }
 }
@@ -348,7 +345,7 @@ fn line_from_fragments(
     styled_graphemes: &[StyledGrapheme<'_>],
 ) -> Line {
     let Some((last, leading)) = fragments.split_last() else {
-        return empty_line();
+        return Line::from_spans(Vec::new());
     };
 
     let mut line = LineBuilder::default();
@@ -393,16 +390,7 @@ fn styled_graphemes(line: &Line) -> Vec<StyledGrapheme<'_>> {
     graphemes
 }
 
-fn find_fragment(source: &str, start_at: usize, fragment: &str) -> Option<usize> {
-    source[start_at..]
-        .find(fragment)
-        .map(|offset| start_at + offset)
-}
-
 fn range_contains(outer: SourceRange, inner: SourceRange) -> bool {
     inner.start >= outer.start && inner.end <= outer.end
 }
 
-fn empty_line() -> Line {
-    Line::from_spans(Vec::new())
-}

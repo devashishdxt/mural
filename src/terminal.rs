@@ -146,7 +146,7 @@ impl<B: Backend> Terminal<B> {
         let lines = self.rendered_lines();
         if self.full_redraw_required {
             self.backend.clear()?;
-            self.print_lines(&lines)?;
+            self.print_lines_with_separator(&lines, false)?;
         } else if lines != self.screen_snapshot {
             self.redraw_changed_lines(&lines)?;
         }
@@ -165,7 +165,7 @@ impl<B: Backend> Terminal<B> {
 
         let lines = self.rendered_live_lines();
         self.backend.clear()?;
-        self.print_lines(&lines)?;
+        self.print_lines_with_separator(&lines, false)?;
         if !lines.is_empty() {
             self.backend.newline()?;
         }
@@ -184,7 +184,7 @@ impl<B: Backend> Terminal<B> {
     ) -> Result<(), TerminalError> {
         self.ensure_unfinished_for_mutation()?;
         let id = id.into();
-        if self.has_id(&id) {
+        if self.blocks().any(|block| block.has_id(&id)) {
             return Err(TerminalError::DuplicateBlockId { id });
         }
 
@@ -269,10 +269,6 @@ impl<B: Backend> Terminal<B> {
         }
     }
 
-    fn has_id(&self, id: &str) -> bool {
-        self.blocks().any(|block| block.has_id(id))
-    }
-
     fn region_containing_id(&self, id: &str) -> Option<BlockRegion> {
         if self.live_blocks.iter().any(|block| block.has_id(id)) {
             Some(BlockRegion::Live)
@@ -302,10 +298,6 @@ impl<B: Backend> Terminal<B> {
         }
     }
 
-    fn print_lines(&mut self, lines: &[Line]) -> io::Result<()> {
-        self.print_lines_with_separator(lines, false)
-    }
-
     fn print_lines_with_separator(
         &mut self,
         lines: &[Line],
@@ -333,7 +325,7 @@ impl<B: Backend> Terminal<B> {
             }
             self.backend.move_to_column(0)?;
             self.backend.clear_from_cursor_down()?;
-            self.print_lines(&lines[first_changed..])
+            self.print_lines_with_separator(&lines[first_changed..], false)
         } else {
             self.print_lines_with_separator(&lines[first_changed..], previous_len > 0)
         }

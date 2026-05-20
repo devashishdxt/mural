@@ -29,7 +29,7 @@ fn raw_line(content: &str) -> Result<Line, TextError> {
 }
 
 fn ansi_line(content: &str) -> Result<Line, TextError> {
-    let mut builder = SpanBuilder::new();
+    let mut builder = SpanBuilder::default();
 
     for block in get_blocks(content) {
         builder.push(
@@ -41,6 +41,7 @@ fn ansi_line(content: &str) -> Result<Line, TextError> {
     Ok(Line::from_spans(builder.finish()?))
 }
 
+#[derive(Default)]
 struct SpanBuilder {
     spans: Vec<Span>,
     content: String,
@@ -48,14 +49,6 @@ struct SpanBuilder {
 }
 
 impl SpanBuilder {
-    fn new() -> Self {
-        Self {
-            spans: Vec::new(),
-            content: String::new(),
-            style: Style::new(),
-        }
-    }
-
     fn push(&mut self, content: String, style: Style) -> Result<(), TextError> {
         if content.is_empty() {
             return Ok(());

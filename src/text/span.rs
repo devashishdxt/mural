@@ -54,10 +54,6 @@ impl Span {
     pub fn display_width(&self) -> usize {
         UnicodeWidthStr::width(self.content.as_str())
     }
-
-    pub fn display_height(&self) -> usize {
-        1
-    }
 }
 
 fn single_span(mut lines: Vec<Line>) -> Result<Span, TextError> {
