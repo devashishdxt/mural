@@ -3,7 +3,9 @@
 mod hr;
 mod list_item;
 mod padding;
+mod spinner;
 
 pub use hr::{Hr, hr};
 pub use list_item::{ListItem, list_item};
 pub use padding::{Padding, padding};
+pub use spinner::{Spinner, spinner};
