@@ -14,14 +14,6 @@ struct BlockEntry {
 }
 
 impl BlockEntry {
-    fn unidentified(block: impl Render + 'static) -> Self {
-        Self::new(None, block)
-    }
-
-    fn identified(id: String, block: impl Render + 'static) -> Self {
-        Self::new(Some(id), block)
-    }
-
     fn new(id: Option<String>, block: impl Render + 'static) -> Self {
         Self {
             id,
@@ -116,7 +108,7 @@ impl<B: Backend> Terminal<B> {
     /// by [`Terminal::finish`].
     pub fn push_live(&mut self, block: impl Render + 'static) -> io::Result<()> {
         self.ensure_unfinished()?;
-        self.live_blocks.push(BlockEntry::unidentified(block));
+        self.live_blocks.push(BlockEntry::new(None, block));
         Ok(())
     }
 
@@ -126,7 +118,7 @@ impl<B: Backend> Terminal<B> {
     /// [`Terminal::finish`].
     pub fn push_pinned(&mut self, block: impl Render + 'static) -> io::Result<()> {
         self.ensure_unfinished()?;
-        self.pinned_blocks.push(BlockEntry::unidentified(block));
+        self.pinned_blocks.push(BlockEntry::new(None, block));
         Ok(())
     }
 
@@ -249,7 +241,7 @@ impl<B: Backend> Terminal<B> {
         }
 
         self.blocks_in_region_mut(region)
-            .push(BlockEntry::identified(id, block));
+            .push(BlockEntry::new(Some(id), block));
         Ok(())
     }
 
@@ -383,11 +375,9 @@ impl<B: Backend> Terminal<B> {
     }
 
     fn write_frame_ending(&mut self, mode: RenderMode) -> io::Result<()> {
-        if mode.end_with_newline() {
+        if mode == RenderMode::Finish {
             self.backend.newline()?;
             self.backend.move_to_column(0)?;
-        }
-        if mode.show_cursor() {
             self.backend.show_cursor()?;
         }
         Ok(())
@@ -454,7 +444,7 @@ impl<B: Backend> Terminal<B> {
         let safe_width = self.safe_width();
         let mut lines = Vec::with_capacity(self.screen_snapshot.len());
 
-        if mode.render_pinned() {
+        if mode == RenderMode::Normal {
             for block in self.blocks_mut() {
                 block.append_rendered_lines(safe_width, &mut lines);
             }
@@ -501,20 +491,6 @@ fn first_changed_line(previous: &[Line], next: &[Line]) -> Option<usize> {
 enum RenderMode {
     Normal,
     Finish,
-}
-
-impl RenderMode {
-    fn render_pinned(self) -> bool {
-        matches!(self, RenderMode::Normal)
-    }
-
-    fn end_with_newline(self) -> bool {
-        matches!(self, RenderMode::Finish)
-    }
-
-    fn show_cursor(self) -> bool {
-        matches!(self, RenderMode::Finish)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -70,7 +70,7 @@ impl<T> ListItem<T> {
     /// escapes, or other control characters.
     pub fn bullet(mut self, bullet: impl Into<String>) -> Result<Self, TextError> {
         let bullet = bullet.into();
-        self.bullet_width = validate_bullet(&bullet)?;
+        self.bullet_width = validate_non_empty_display_text(&bullet)?;
         self.bullet = bullet;
         Ok(self)
     }
@@ -194,8 +194,4 @@ impl<T: Render> Render for ListItem<T> {
     fn render_every_frame(&self) -> bool {
         self.content.render_every_frame()
     }
-}
-
-fn validate_bullet(bullet: &str) -> Result<usize, TextError> {
-    validate_non_empty_display_text(bullet)
 }

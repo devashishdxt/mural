@@ -207,7 +207,7 @@ impl Textarea {
     /// contain no structural terminal content.
     pub fn prompt(mut self, prompt: impl Into<String>) -> Result<Self, TextError> {
         let prompt = prompt.into();
-        self.prompt_width = validate_prompt(&prompt)?;
+        self.prompt_width = validate_non_empty_display_text(&prompt)?;
         self.prompt = prompt;
         Ok(self)
     }
@@ -238,7 +238,7 @@ impl Textarea {
     /// Sets placeholder text shown when the buffer is empty.
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Result<Self, TextError> {
         let placeholder = placeholder.into();
-        validate_placeholder(&placeholder)?;
+        validate_non_empty_display_text(&placeholder)?;
         self.placeholder = Some(placeholder);
         Ok(self)
     }
@@ -714,7 +714,7 @@ impl CursorUnit {
                 content: content.to_owned(),
                 style,
             }],
-            width: display_width(content),
+            width: UnicodeWidthStr::width(content),
         }
     }
 
@@ -744,18 +744,6 @@ struct StyledPiece {
     style: Style,
 }
 
-fn display_width(content: &str) -> usize {
-    UnicodeWidthStr::width(content)
-}
-
-fn validate_prompt(prompt: &str) -> Result<usize, TextError> {
-    validate_non_empty_display_text(prompt)
-}
-
-fn validate_placeholder(placeholder: &str) -> Result<(), TextError> {
-    validate_non_empty_display_text(placeholder).map(|_| ())
-}
-
 fn visual_rows(value: &str, content_width: usize) -> Vec<VisualRow> {
     let mut rows = Vec::new();
     let mut row = VisualRow::new(0);
@@ -772,7 +760,7 @@ fn visual_rows(value: &str, content_width: usize) -> Vec<VisualRow> {
         let width = if grapheme == "\t" {
             4
         } else {
-            display_width(grapheme)
+            UnicodeWidthStr::width(grapheme)
         };
         if row.width > 0 && row.width + width > content_width {
             row.end = start;

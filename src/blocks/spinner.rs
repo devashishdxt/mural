@@ -134,7 +134,7 @@ impl<T> Spinner<T> {
     /// display width.
     pub fn success_marker(mut self, marker: impl Into<String>) -> Result<Self, TextError> {
         let marker = marker.into();
-        validate_symbol(&marker)?;
+        validate_non_empty_display_text(&marker)?;
         self.success_marker = marker;
         self.recalculate_frame_width();
         Ok(self)
@@ -152,7 +152,7 @@ impl<T> Spinner<T> {
     /// display width.
     pub fn failure_marker(mut self, marker: impl Into<String>) -> Result<Self, TextError> {
         let marker = marker.into();
-        validate_symbol(&marker)?;
+        validate_non_empty_display_text(&marker)?;
         self.failure_marker = marker;
         self.recalculate_frame_width();
         Ok(self)
@@ -391,14 +391,10 @@ where
     }
 
     for frame in &frames {
-        validate_symbol(frame)?;
+        validate_non_empty_display_text(frame)?;
     }
 
     Ok(frames)
-}
-
-fn validate_symbol(symbol: &str) -> Result<usize, TextError> {
-    validate_non_empty_display_text(symbol)
 }
 
 fn max_marker_width(frames: &[String], success_marker: &str, failure_marker: &str) -> usize {
