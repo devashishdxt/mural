@@ -21,6 +21,15 @@ fn style_supports_colors_and_text_modifiers() {
     assert!(style.modifiers().contains(Modifiers::ITALIC));
     assert!(style.modifiers().contains(Modifiers::UNDERLINE));
     assert!(style.modifiers().contains(Modifiers::REVERSED));
+
+    let overlaid = Style::new()
+        .fg(Color::Blue)
+        .modifier(Modifiers::ITALIC)
+        .overlay(Style::new().bg(Color::Yellow).reversed());
+    assert_eq!(overlaid.foreground(), Some(Color::Blue));
+    assert_eq!(overlaid.background(), Some(Color::Yellow));
+    assert!(overlaid.modifiers().contains(Modifiers::ITALIC));
+    assert!(overlaid.modifiers().contains(Modifiers::REVERSED));
 }
 
 #[test]

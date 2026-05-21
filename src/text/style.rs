@@ -56,6 +56,27 @@ impl Style {
         self
     }
 
+    /// Adds the given modifier.
+    pub fn modifier(mut self, modifier: Modifiers) -> Self {
+        self.modifiers.insert(modifier);
+        self
+    }
+
+    /// Overlays another style on this style.
+    ///
+    /// Foreground/background colors from `overlay` replace existing colors when set;
+    /// modifiers are unioned.
+    pub fn overlay(mut self, overlay: Style) -> Self {
+        if let Some(color) = overlay.fg {
+            self.fg = Some(color);
+        }
+        if let Some(color) = overlay.bg {
+            self.bg = Some(color);
+        }
+        self.modifiers.insert(overlay.modifiers);
+        self
+    }
+
     /// Returns the foreground color, if any.
     pub fn foreground(&self) -> Option<Color> {
         self.fg

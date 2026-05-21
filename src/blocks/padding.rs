@@ -1,4 +1,5 @@
-use crate::{Line, Render, Span, Style, Text};
+use super::layout::{empty_lines, push_spaces};
+use crate::{Line, Render, Text};
 
 /// Creates a padding block around renderable content.
 ///
@@ -186,16 +187,4 @@ impl<T> Padding<T> {
         spans.extend(content_spans);
         Line::from_spans(spans)
     }
-}
-
-fn empty_lines(count: usize) -> impl Iterator<Item = Line> {
-    std::iter::repeat_with(|| Line::from_spans(Vec::new())).take(count)
-}
-
-fn push_spaces(spans: &mut Vec<Span>, width: usize) {
-    if width == 0 {
-        return;
-    }
-
-    spans.push(Span::from_trusted_content(" ".repeat(width), Style::new()));
 }

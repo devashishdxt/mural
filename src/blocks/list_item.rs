@@ -1,3 +1,4 @@
+use super::{layout::push_spaces, validation::validate_non_empty_display_text};
 use crate::{Line, Render, Span, Style, Text, TextError};
 use unicode_width::UnicodeWidthStr;
 
@@ -195,21 +196,6 @@ impl<T: Render> Render for ListItem<T> {
     }
 }
 
-fn push_spaces(spans: &mut Vec<Span>, width: usize) {
-    if width == 0 {
-        return;
-    }
-
-    spans.push(Span::from_trusted_content(" ".repeat(width), Style::new()));
-}
-
 fn validate_bullet(bullet: &str) -> Result<usize, TextError> {
-    Span::validate_content(bullet)?;
-
-    let width = UnicodeWidthStr::width(bullet);
-    if width == 0 {
-        return Err(TextError::StructuralContent);
-    }
-
-    Ok(width)
+    validate_non_empty_display_text(bullet)
 }

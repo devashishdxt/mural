@@ -1,3 +1,4 @@
+use super::{layout::push_spaces, validation::validate_non_empty_display_text};
 use crate::{Line, Render, Span, Style, Text, TextError};
 use std::cell::Cell;
 use unicode_width::UnicodeWidthStr;
@@ -379,14 +380,6 @@ struct Marker {
     width: usize,
 }
 
-fn push_spaces(spans: &mut Vec<Span>, width: usize) {
-    if width == 0 {
-        return;
-    }
-
-    spans.push(Span::from_trusted_content(" ".repeat(width), Style::new()));
-}
-
 fn validate_frames<I, S>(frames: I) -> Result<Vec<String>, TextError>
 where
     I: IntoIterator<Item = S>,
@@ -405,14 +398,7 @@ where
 }
 
 fn validate_symbol(symbol: &str) -> Result<usize, TextError> {
-    Span::validate_content(symbol)?;
-
-    let width = UnicodeWidthStr::width(symbol);
-    if width == 0 {
-        return Err(TextError::StructuralContent);
-    }
-
-    Ok(width)
+    validate_non_empty_display_text(symbol)
 }
 
 fn max_marker_width(frames: &[String], success_marker: &str, failure_marker: &str) -> usize {
