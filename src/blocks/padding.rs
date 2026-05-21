@@ -8,7 +8,7 @@ use crate::{Line, Render, Text};
 /// # Examples
 ///
 /// ```
-/// # use brisk::{padding, Text, TextError};
+/// # use mural::{padding, Text, TextError};
 /// # fn main() -> Result<(), TextError> {
 /// let padded = padding(Text::from_plain("hello")?).left(2).right(1);
 /// assert_eq!(padded.left_width(), 2);
@@ -30,7 +30,7 @@ pub fn padding<T>(content: T) -> Padding<T> {
 /// # Examples
 ///
 /// ```
-/// # use brisk::{Padding, Text, TextError};
+/// # use mural::{Padding, Text, TextError};
 /// # fn main() -> Result<(), TextError> {
 /// let padded = Padding::new(Text::from_plain("hello")?)
 ///     .top(1)

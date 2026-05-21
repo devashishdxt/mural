@@ -10,7 +10,7 @@ const DEFAULT_CHARACTER: char = '─';
 /// # Examples
 ///
 /// ```
-/// # use brisk::hr;
+/// # use mural::hr;
 /// let rule = hr();
 /// assert_eq!(rule.fill_character(), '─');
 /// ```
@@ -27,7 +27,7 @@ pub fn hr() -> Hr {
 /// # Examples
 ///
 /// ```
-/// # use brisk::{Hr, Style, TextError};
+/// # use mural::{Hr, Style, TextError};
 /// # fn main() -> Result<(), TextError> {
 /// let rule = Hr::new()
 ///     .character('═')?

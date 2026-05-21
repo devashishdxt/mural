@@ -1,12 +1,12 @@
 [package]
-name = "brisk"
+name = "mural"
 version = "0.1.0"
 edition = "2024"
 authors = ["Devashish Dixit <devashishdxt@gmail.com>"]
 description = "Conversational terminal rendering for command-line applications."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/devashishdxt/brisk"
-documentation = "https://docs.rs/brisk"
+repository = "https://github.com/devashishdxt/mural"
+documentation = "https://docs.rs/mural"
 keywords = ["terminal", "tui", "renderer", "ansi", "conversation"]
 categories = ["command-line-interface"]
 

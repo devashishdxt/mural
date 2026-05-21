@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use brisk::{
+use mural::{
     Line, Render, Size, Terminal, Text,
     backend::fake::{FakeBackend, Operation},
 };

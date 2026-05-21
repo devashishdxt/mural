@@ -4,7 +4,7 @@ use std::any::{Any, type_name};
 /// A value that can render itself into terminal text for a printable width.
 ///
 /// Blocks receive the safe printable width chosen by [`Terminal`](crate::Terminal)
-/// and return styled text. Brisk wraps the returned text again if needed before
+/// and return styled text. Mural wraps the returned text again if needed before
 /// writing it to the backend.
 pub trait Render {
     /// Renders this value for `width` terminal columns.
@@ -14,12 +14,12 @@ pub trait Render {
     ///
     /// This is a scheduling hint for blocks whose rendered output may change
     /// without mutable access through [`Terminal`](crate::Terminal), such as
-    /// spinners or clocks. Brisk still diffs the rendered output against the
+    /// spinners or clocks. Mural still diffs the rendered output against the
     /// last successful frame and skips terminal writes when the visual lines are
     /// unchanged.
     ///
     /// Keep this method cheap and side-effect-free. It may be called whenever
-    /// Brisk checks whether a block needs rerendering, and callers should not
+    /// Mural checks whether a block needs rerendering, and callers should not
     /// rely on exact call counts.
     fn render_every_frame(&self) -> bool {
         false

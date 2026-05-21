@@ -1,4 +1,4 @@
-use brisk::{
+use mural::{
     Color, Line, Modifiers, Size, Span, Style, Terminal, Text, TextError,
     backend::fake::{FakeBackend, Operation},
 };

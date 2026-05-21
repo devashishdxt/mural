@@ -1,4 +1,4 @@
-use brisk::{Color, Line, Modifiers, Span, Style, Text, TextError};
+use mural::{Color, Line, Modifiers, Span, Style, Text, TextError};
 
 #[test]
 fn ansi_text_construction_converts_supported_sgr_styles() {

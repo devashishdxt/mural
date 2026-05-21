@@ -1,4 +1,4 @@
-use brisk::{
+use mural::{
     Color, Hr, Line, ListItem, Padding, Render, Size, Span, Spinner, Style, Terminal, Text,
     Textarea,
 };
@@ -8,7 +8,7 @@ const FPS: u64 = 15;
 const FRAME_DELAY: Duration = Duration::from_millis(1_000 / FPS);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Run this example manually to watch Brisk update a conversation in the
+    // Run this example manually to watch Mural update a conversation in the
     // terminal's normal buffer:
     //
     //     cargo run --example conversation
@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The first user message also goes through the textarea: applications own
     // raw mode and keyboard events; this example mutates the textarea directly
     // to simulate typing and submitting.
-    type_into_input(&mut terminal, "explain Brisk in one sentence")?;
+    type_into_input(&mut terminal, "explain Mural in one sentence")?;
     render_frames(&mut terminal, 4)?;
     submit_input(&mut terminal)?;
 
@@ -48,17 +48,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     terminal.insert_live("thinking", live_padded(thinking_message("thinking…")?))?;
     render_frames(&mut terminal, 10)?;
     terminal.remove_live("thinking")?;
-    terminal.insert_live("assistant", live_padded(assistant_message("Brisk keeps")?))?;
+    terminal.insert_live("assistant", live_padded(assistant_message("Mural keeps")?))?;
     render_frames(&mut terminal, 3)?;
 
     // Identified blocks can be mutated between renders. This simulates a
     // streaming assistant response over several visible frames. The pinned
     // status spinner advances on every render while it is visible.
     for content in [
-        "Brisk keeps",
-        "Brisk keeps a live conversation",
-        "Brisk keeps a live conversation region plus pinned input",
-        "Brisk keeps a live conversation region plus pinned input/status UI in a normal terminal buffer.",
+        "Mural keeps",
+        "Mural keeps a live conversation",
+        "Mural keeps a live conversation region plus pinned input",
+        "Mural keeps a live conversation region plus pinned input/status UI in a normal terminal buffer.",
     ] {
         *terminal
             .live_block_mut::<Padding<ListItem>>("assistant")?
@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     terminal.insert_live(
         "assistant-resize",
         live_padded(assistant_message(format!(
-            "For `{submitted}`, the caller notifies Brisk about the new size, and the next render performs a full redraw at the new safe width."
+            "For `{submitted}`, the caller notifies Mural about the new size, and the next render performs a full redraw at the new safe width."
         ))?),
     )?;
     render_frames(&mut terminal, 12)?;
@@ -122,7 +122,7 @@ impl AnswerStatus {
         }
     }
 
-    fn show(&mut self, content: &str) -> Result<&mut Self, brisk::TextError> {
+    fn show(&mut self, content: &str) -> Result<&mut Self, mural::TextError> {
         *self.spinner.content_mut() = Text::from_plain(content)?;
         self.spinner.reset();
         self.visible = true;
@@ -149,21 +149,21 @@ impl Render for AnswerStatus {
     }
 }
 
-fn user_message(content: impl AsRef<str>) -> Result<ListItem, brisk::TextError> {
+fn user_message(content: impl AsRef<str>) -> Result<ListItem, mural::TextError> {
     Ok(ListItem::new(styled_text(content, Style::new()))
         .bullet("›")?
         .bullet_style(Style::new().fg(Color::BrightCyan).bold())
         .gap(1))
 }
 
-fn assistant_message(content: impl AsRef<str>) -> Result<ListItem, brisk::TextError> {
+fn assistant_message(content: impl AsRef<str>) -> Result<ListItem, mural::TextError> {
     Ok(ListItem::new(styled_text(content, Style::new()))
         .bullet("✦")?
         .bullet_style(Style::new().fg(Color::BrightMagenta).bold())
         .gap(1))
 }
 
-fn thinking_message(content: impl AsRef<str>) -> Result<ListItem, brisk::TextError> {
+fn thinking_message(content: impl AsRef<str>) -> Result<ListItem, mural::TextError> {
     Ok(ListItem::new(styled_text(
         content,
         Style::new().fg(Color::BrightBlack).dim(),
@@ -187,13 +187,13 @@ fn pinned<T>(block: T) -> Padding<T> {
     Padding::new(block).left(1)
 }
 
-fn render_frame<B: brisk::Backend>(terminal: &mut Terminal<B>) -> std::io::Result<()> {
+fn render_frame<B: mural::Backend>(terminal: &mut Terminal<B>) -> std::io::Result<()> {
     terminal.render()?;
     thread::sleep(FRAME_DELAY);
     Ok(())
 }
 
-fn render_frames<B: brisk::Backend>(
+fn render_frames<B: mural::Backend>(
     terminal: &mut Terminal<B>,
     frames: usize,
 ) -> std::io::Result<()> {
@@ -203,7 +203,7 @@ fn render_frames<B: brisk::Backend>(
     Ok(())
 }
 
-fn type_into_input<B: brisk::Backend>(
+fn type_into_input<B: mural::Backend>(
     terminal: &mut Terminal<B>,
     content: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -217,7 +217,7 @@ fn type_into_input<B: brisk::Backend>(
     Ok(())
 }
 
-fn move_input_left<B: brisk::Backend>(
+fn move_input_left<B: mural::Backend>(
     terminal: &mut Terminal<B>,
     steps: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -231,7 +231,7 @@ fn move_input_left<B: brisk::Backend>(
     Ok(())
 }
 
-fn submit_input<B: brisk::Backend>(
+fn submit_input<B: mural::Backend>(
     terminal: &mut Terminal<B>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let submitted = {
@@ -246,7 +246,7 @@ fn submit_input<B: brisk::Backend>(
     Ok(submitted)
 }
 
-fn show_status<B: brisk::Backend>(
+fn show_status<B: mural::Backend>(
     terminal: &mut Terminal<B>,
     content: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -257,7 +257,7 @@ fn show_status<B: brisk::Backend>(
     Ok(())
 }
 
-fn hide_status<B: brisk::Backend>(
+fn hide_status<B: mural::Backend>(
     terminal: &mut Terminal<B>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     terminal

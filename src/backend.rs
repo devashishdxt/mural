@@ -14,7 +14,7 @@ pub use stdout::StdoutBackend;
 
 /// Low-level terminal operations required by the renderer.
 ///
-/// Backends are responsible only for terminal I/O. Brisk decides when to move,
+/// Backends are responsible only for terminal I/O. Mural decides when to move,
 /// clear, print, and flush while keeping its own cached view of the managed
 /// screen area.
 pub trait Backend {

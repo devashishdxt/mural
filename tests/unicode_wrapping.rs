@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use brisk::{
+use mural::{
     Color, Line, Render, Size, Span, Style, Terminal, Text,
     backend::fake::{FakeBackend, Operation},
 };

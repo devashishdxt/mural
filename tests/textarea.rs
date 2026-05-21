@@ -1,4 +1,4 @@
-use brisk::{Color, Line, Render, Span, Style, TextError, Textarea, textarea};
+use mural::{Color, Line, Render, Span, Style, TextError, Textarea, textarea};
 
 #[test]
 fn textarea_convenience_and_defaults_render_empty_input_with_prompt_and_cursor() {
@@ -257,6 +257,6 @@ fn textarea_moves_vertically_by_visual_rows_preserving_column() {
     assert_eq!(input.cursor(), 4);
 }
 
-fn plain_lines(text: &brisk::Text) -> Vec<String> {
+fn plain_lines(text: &mural::Text) -> Vec<String> {
     text.lines().iter().map(Line::plain_content).collect()
 }

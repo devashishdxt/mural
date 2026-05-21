@@ -204,7 +204,7 @@ impl<B: Backend> Terminal<B> {
 
     /// Renders dirty or changed live and pinned blocks to the backend.
     ///
-    /// Brisk writes the smallest safe suffix when possible and falls back to a
+    /// Mural writes the smallest safe suffix when possible and falls back to a
     /// full rewrite for recovery, resize, or changes above the visible viewport.
     pub fn render(&mut self) -> io::Result<()> {
         self.ensure_unfinished()?;

@@ -13,7 +13,7 @@ const DEFAULT_GAP: usize = 1;
 /// # Examples
 ///
 /// ```
-/// # use brisk::{list_item, TextError};
+/// # use mural::{list_item, TextError};
 /// # fn main() -> Result<(), TextError> {
 /// let item = list_item("hello")?;
 /// assert_eq!(item.bullet_content(), "•");
@@ -33,7 +33,7 @@ pub fn list_item(content: impl AsRef<str>) -> Result<ListItem<Text>, TextError> 
 /// # Examples
 ///
 /// ```
-/// # use brisk::{ListItem, Style, Text, TextError};
+/// # use mural::{ListItem, Style, Text, TextError};
 /// # fn main() -> Result<(), TextError> {
 /// let item = ListItem::new(Text::from_plain("hello world")?)
 ///     .bullet("-")?

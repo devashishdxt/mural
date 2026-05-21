@@ -16,7 +16,7 @@ const DEFAULT_GAP: usize = 1;
 /// # Examples
 ///
 /// ```
-/// # use brisk::{spinner, TextError};
+/// # use mural::{spinner, TextError};
 /// # fn main() -> Result<(), TextError> {
 /// let item = spinner("loading")?;
 /// assert!(item.is_running());
@@ -40,7 +40,7 @@ pub fn spinner(content: impl AsRef<str>) -> Result<Spinner<Text>, TextError> {
 /// # Examples
 ///
 /// ```
-/// # use brisk::{Spinner, Style, Text, TextError};
+/// # use mural::{Spinner, Style, Text, TextError};
 /// # fn main() -> Result<(), TextError> {
 /// let item = Spinner::new(Text::from_plain("loading")?)
 ///     .spinner_style(Style::new().dim())

@@ -1,4 +1,4 @@
-use brisk::{
+use mural::{
     Color, Hr, Line, ListItem, Padding, Render, Size, Span, Spinner, Style, Terminal, Text,
     TextError,
     backend::fake::{FakeBackend, Operation},
