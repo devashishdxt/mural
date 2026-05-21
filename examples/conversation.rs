@@ -1,4 +1,4 @@
-use brisk::{Color, Hr, ListItem, Render, Size, Style, Terminal, Text, list_item};
+use brisk::{Color, Hr, ListItem, Padding, Render, Size, Style, Terminal, Text, list_item};
 use std::{cell::Cell, thread, time::Duration};
 
 const FRAME_DELAY: Duration = Duration::from_millis(700);
@@ -12,44 +12,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Live blocks are the transcript. Pinned blocks render after live blocks and
     // are useful for status, token counts, or progress indicators.
-    terminal.push_live(list_item("user: explain Brisk in one sentence")?)?;
-    terminal.insert_live("assistant", list_item("assistant: thinking…")?)?;
-    terminal.push_pinned(Hr::new().style(Style::new().fg(Color::BrightBlack).dim()))?;
-    terminal.insert_pinned("status", Status::queued())?;
+    terminal.push_live(padded(list_item("user: explain Brisk in one sentence")?))?;
+    terminal.insert_live("assistant", padded(list_item("assistant: thinking…")?))?;
+    terminal.push_pinned(padded(
+        Hr::new().style(Style::new().fg(Color::BrightBlack).dim()),
+    ))?;
+    terminal.insert_pinned("status", padded(Status::queued()))?;
     render_frame(&mut terminal)?;
 
     // Identified blocks can be mutated between renders. This simulates a
     // streaming assistant response over several visible frames. The pinned
     // status is switched to "working" once; after that, its spinner advances on
     // every render because Status opts into Render::render_every_frame().
-    terminal.pinned_block_mut::<Status>("status")?.set_working();
+    terminal
+        .pinned_block_mut::<Padding<Status>>("status")?
+        .content_mut()
+        .set_working();
     for content in [
         "assistant: Brisk keeps",
         "assistant: Brisk keeps a live conversation",
         "assistant: Brisk keeps a live conversation region plus pinned status",
         "assistant: Brisk keeps a live conversation region plus pinned status in a normal terminal buffer.",
     ] {
-        *terminal.live_block_mut::<ListItem>("assistant")? = list_item(content)?;
+        *terminal
+            .live_block_mut::<Padding<ListItem>>("assistant")?
+            .content_mut() = list_item(content)?;
         render_frame(&mut terminal)?;
     }
 
     // Multiple state changes may be batched before a single render call.
-    terminal.push_live(list_item(
+    terminal.push_live(padded(list_item(
         "user: what happens if the terminal changes size?",
-    )?)?;
+    )?))?;
     terminal
-        .pinned_block_mut::<Status>("status")?
+        .pinned_block_mut::<Padding<Status>>("status")?
+        .content_mut()
         .set_batching_resize();
     terminal.resize(Size::new(48, 12))?;
     render_frame(&mut terminal)?;
 
     terminal.insert_live(
         "assistant-resize",
-        list_item(
+        padded(list_item(
             "assistant: the caller notifies Brisk, and the next render performs a full redraw at the new safe width.",
-        )?,
+        )?),
     )?;
-    terminal.pinned_block_mut::<Status>("status")?.set_done();
+    terminal
+        .pinned_block_mut::<Padding<Status>>("status")?
+        .content_mut()
+        .set_done();
     render_frame(&mut terminal)?;
 
     // finish() removes pinned UI, leaves live transcript text behind, restores
@@ -58,6 +69,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nfinished: pinned status was cleaned up; live transcript remains above.");
 
     Ok(())
+}
+
+fn padded<T>(block: T) -> Padding<T> {
+    Padding::new(block).top(1).left(1)
 }
 
 fn render_frame<B: brisk::Backend>(terminal: &mut Terminal<B>) -> std::io::Result<()> {

@@ -1,7 +1,7 @@
 use brisk::{
-    Color, Hr, Line, ListItem, Render, Size, Span, Style, Terminal, Text, TextError,
+    Color, Hr, Line, ListItem, Padding, Render, Size, Span, Style, Terminal, Text, TextError,
     backend::fake::{FakeBackend, Operation},
-    blocks, hr, list_item,
+    blocks, hr, list_item, padding,
 };
 
 #[test]
@@ -245,4 +245,168 @@ fn invalid_list_item_bullets_are_rejected_as_structural_content() {
         item.bullet("\u{0301}").unwrap_err(),
         TextError::StructuralContent
     );
+}
+
+#[test]
+fn padding_convenience_and_defaults_match_new() {
+    let content = Text::from_plain("hello").unwrap();
+    let block = Padding::new(content.clone());
+
+    assert_eq!(padding(content.clone()), block);
+    assert_eq!(blocks::padding(content.clone()), block);
+    assert_eq!(blocks::Padding::new(content.clone()), block);
+    assert_eq!(block.content(), &content);
+    assert_eq!(block.top_height(), 0);
+    assert_eq!(block.bottom_height(), 0);
+    assert_eq!(block.left_width(), 0);
+    assert_eq!(block.right_width(), 0);
+}
+
+#[test]
+fn padding_builders_and_getters_set_each_side() {
+    let block = Padding::new(Text::from_plain("hello").unwrap())
+        .top(1)
+        .bottom(2)
+        .left(3)
+        .right(4);
+
+    assert_eq!(block.top_height(), 1);
+    assert_eq!(block.bottom_height(), 2);
+    assert_eq!(block.left_width(), 3);
+    assert_eq!(block.right_width(), 4);
+
+    let vertical = Padding::new(Text::empty()).vertical(5);
+    assert_eq!(vertical.top_height(), 5);
+    assert_eq!(vertical.bottom_height(), 5);
+
+    let horizontal = Padding::new(Text::empty()).horizontal(6);
+    assert_eq!(horizontal.left_width(), 6);
+    assert_eq!(horizontal.right_width(), 6);
+
+    let all = Padding::new(Text::empty()).all(7);
+    assert_eq!(all.top_height(), 7);
+    assert_eq!(all.bottom_height(), 7);
+    assert_eq!(all.left_width(), 7);
+    assert_eq!(all.right_width(), 7);
+}
+
+#[test]
+fn padding_wraps_content_inside_horizontal_padding() {
+    let text = Padding::new(Text::from_plain("abcdef").unwrap())
+        .left(2)
+        .right(3)
+        .render(10);
+
+    assert_eq!(text.lines().len(), 2);
+    assert_eq!(text.lines()[0].plain_content(), "  abcde");
+    assert_eq!(text.lines()[1].plain_content(), "  f");
+    assert!(text.lines().iter().all(|line| line.display_width() <= 10));
+}
+
+#[test]
+fn padding_does_not_emit_right_padding_spaces() {
+    let text = Padding::new(Text::from_plain("abc").unwrap())
+        .left(2)
+        .right(3)
+        .render(10);
+
+    assert_eq!(text.lines().len(), 1);
+    assert_eq!(text.lines()[0].plain_content(), "  abc");
+    assert_eq!(text.lines()[0].display_width(), 5);
+}
+
+#[test]
+fn padding_top_and_bottom_are_empty_lines() {
+    let text = Padding::new(Text::from_plain("body").unwrap())
+        .top(2)
+        .bottom(1)
+        .render(10);
+
+    assert_eq!(text.lines().len(), 4);
+    assert!(text.lines()[0].spans().is_empty());
+    assert!(text.lines()[1].spans().is_empty());
+    assert_eq!(text.lines()[2].plain_content(), "body");
+    assert!(text.lines()[3].spans().is_empty());
+}
+
+#[test]
+fn padding_preserves_vertical_padding_around_empty_content() {
+    let text = Padding::new(Text::empty()).top(1).bottom(2).render(10);
+
+    assert_eq!(text.lines().len(), 3);
+    assert!(text.lines().iter().all(|line| line.spans().is_empty()));
+}
+
+#[test]
+fn padding_applies_left_padding_to_explicit_blank_content_lines() {
+    let text = Padding::new(Text::from_plain("a\n\nb").unwrap())
+        .left(2)
+        .render(10);
+
+    assert_eq!(text.lines().len(), 3);
+    assert_eq!(text.lines()[0].plain_content(), "  a");
+    assert_eq!(text.lines()[1].plain_content(), "  ");
+    assert_eq!(text.lines()[2].plain_content(), "  b");
+}
+
+#[test]
+fn padding_handles_zero_and_narrow_widths() {
+    let block = Padding::new(Text::from_plain("abc").unwrap())
+        .top(1)
+        .bottom(1)
+        .left(2)
+        .right(2);
+
+    assert!(block.render(0).lines().is_empty());
+
+    let text = block.render(3);
+    assert_eq!(text.lines().len(), 2);
+    assert!(text.lines()[0].spans().is_empty());
+    assert!(text.lines()[1].spans().is_empty());
+}
+
+#[test]
+fn padding_handles_huge_padding_values_without_overflow() {
+    let text = Padding::new(Text::from_plain("abc").unwrap())
+        .left(usize::MAX)
+        .right(usize::MAX)
+        .top(1)
+        .render(5);
+
+    assert_eq!(text.lines().len(), 1);
+    assert!(text.lines()[0].spans().is_empty());
+}
+
+#[test]
+fn generic_padding_wraps_any_render_block_and_forwards_frame_hint() {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RenderedText {
+        text: Text,
+        every_frame: bool,
+    }
+
+    impl Render for RenderedText {
+        fn render(&self, width: u16) -> Text {
+            self.text.render(width)
+        }
+
+        fn render_every_frame(&self) -> bool {
+            self.every_frame
+        }
+    }
+
+    let mut block = Padding::new(RenderedText {
+        text: Text::from_plain("abcdef").unwrap(),
+        every_frame: true,
+    })
+    .left(1)
+    .right(1);
+    block.content_mut().text = Text::from_plain("abcdefghi").unwrap();
+
+    let text = block.render(5);
+
+    assert!(block.render_every_frame());
+    assert_eq!(text.lines()[0].plain_content(), " abc");
+    assert_eq!(text.lines()[1].plain_content(), " def");
+    assert_eq!(text.lines()[2].plain_content(), " ghi");
 }
