@@ -44,13 +44,18 @@ impl Line {
         &self.spans
     }
 
-    pub(super) fn into_spans(self) -> Vec<Span> {
+    pub(crate) fn into_spans(self) -> Vec<Span> {
         self.spans
     }
 
     /// Returns this line's text content without style information.
     pub fn plain_content(&self) -> String {
-        self.spans.iter().map(Span::content).collect()
+        let content_len = self.spans.iter().map(|span| span.content().len()).sum();
+        let mut content = String::with_capacity(content_len);
+        for span in &self.spans {
+            content.push_str(span.content());
+        }
+        content
     }
 
     /// Returns the Unicode display width of this line.

@@ -65,6 +65,10 @@ impl Text {
         &self.lines
     }
 
+    pub(crate) fn into_lines(self) -> Vec<Line> {
+        self.lines
+    }
+
     /// Returns the maximum display width of any line.
     pub fn display_width(&self) -> usize {
         self.lines
@@ -225,11 +229,16 @@ struct StyledLineBuilder {
 
 impl StyledLineBuilder {
     fn append_range(&mut self, range: SourceRange, styled_graphemes: &[StyledGrapheme<'_>]) {
-        for grapheme in styled_graphemes
-            .iter()
-            .filter(|grapheme| range.contains(grapheme.range))
-        {
-            self.append_text(grapheme.content, grapheme.style);
+        for grapheme in styled_graphemes {
+            if grapheme.range.end <= range.start {
+                continue;
+            }
+            if grapheme.range.start >= range.end {
+                break;
+            }
+            if range.contains(grapheme.range) {
+                self.append_text(grapheme.content, grapheme.style);
+            }
         }
     }
 
@@ -251,8 +260,10 @@ impl StyledLineBuilder {
             return;
         }
 
-        self.spans
-            .push(unsafe { Span::new_unchecked(std::mem::take(&mut self.content), self.style) });
+        self.spans.push(Span::from_trusted_content(
+            std::mem::take(&mut self.content),
+            self.style,
+        ));
     }
 }
 

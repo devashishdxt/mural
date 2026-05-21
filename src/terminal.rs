@@ -32,7 +32,7 @@ impl BlockEntry {
         }
     }
 
-    fn rendered_lines(&mut self, width: u16) -> Vec<Line> {
+    fn append_rendered_lines(&mut self, width: u16, target: &mut Vec<Line>) {
         if self.is_effectively_dirty() || self.cached_width != Some(width) {
             self.cached_lines = self
                 .block
@@ -43,7 +43,7 @@ impl BlockEntry {
             self.cached_width = Some(width);
         }
 
-        self.cached_lines.clone()
+        target.extend_from_slice(&self.cached_lines);
     }
 
     fn is_effectively_dirty(&self) -> bool {
@@ -452,16 +452,19 @@ impl<B: Backend> Terminal<B> {
 
     fn rendered_lines(&mut self, mode: RenderMode) -> Vec<Line> {
         let safe_width = self.safe_width();
+        let mut lines = Vec::with_capacity(self.screen_snapshot.len());
+
         if mode.render_pinned() {
-            self.blocks_mut()
-                .flat_map(|block| block.rendered_lines(safe_width))
-                .collect()
+            for block in self.blocks_mut() {
+                block.append_rendered_lines(safe_width, &mut lines);
+            }
         } else {
-            self.live_blocks
-                .iter_mut()
-                .flat_map(|block| block.rendered_lines(safe_width))
-                .collect()
+            for block in &mut self.live_blocks {
+                block.append_rendered_lines(safe_width, &mut lines);
+            }
         }
+
+        lines
     }
 
     fn safe_width(&self) -> u16 {

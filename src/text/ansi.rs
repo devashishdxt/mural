@@ -1,6 +1,6 @@
 use super::{Color, Line, Span, Style, TextError};
 use ansi_str::{AnsiStr, Color as AnsiColor, Style as AnsiStyle, get_blocks};
-use std::{iter::Peekable, str::Chars};
+use std::{borrow::Cow, iter::Peekable, str::Chars};
 
 const TAB_REPLACEMENT: &str = "    ";
 type CharStream<'a> = Peekable<Chars<'a>>;
@@ -15,6 +15,7 @@ pub(crate) fn parse_text(content: &str, mode: ParseMode) -> Result<Vec<Line>, Te
     let normalized = normalize_newlines(content);
 
     normalized
+        .as_ref()
         .ansi_split("\n")
         .map(|line| match mode {
             ParseMode::Raw => raw_line(line.as_ref()),
@@ -24,16 +25,17 @@ pub(crate) fn parse_text(content: &str, mode: ParseMode) -> Result<Vec<Line>, Te
 }
 
 fn raw_line(content: &str) -> Result<Line, TextError> {
-    let plain = sanitize_text(&content.ansi_strip());
-    Line::from_plain(plain)
+    let stripped = content.ansi_strip();
+    Line::from_plain(sanitize_text(stripped.as_ref()).into_owned())
 }
 
 fn ansi_line(content: &str) -> Result<Line, TextError> {
     let mut builder = SpanBuilder::default();
 
     for block in get_blocks(content) {
+        let stripped = block.text().ansi_strip();
         builder.push(
-            sanitize_text(&block.text().ansi_strip()),
+            sanitize_text(stripped.as_ref()),
             style_from_ansi(block.style()),
         );
     }
@@ -49,7 +51,8 @@ struct SpanBuilder {
 }
 
 impl SpanBuilder {
-    fn push(&mut self, content: String, style: Style) {
+    fn push(&mut self, content: impl AsRef<str>, style: Style) {
+        let content = content.as_ref();
         if content.is_empty() {
             return;
         }
@@ -59,7 +62,7 @@ impl SpanBuilder {
         }
 
         self.style = style;
-        self.content.push_str(&content);
+        self.content.push_str(content);
     }
 
     fn finish(mut self) -> Vec<Span> {
@@ -72,8 +75,10 @@ impl SpanBuilder {
             return;
         }
 
-        self.spans
-            .push(unsafe { Span::new_unchecked(std::mem::take(&mut self.content), self.style) });
+        self.spans.push(Span::from_trusted_content(
+            std::mem::take(&mut self.content),
+            self.style,
+        ));
     }
 }
 
@@ -128,8 +133,12 @@ fn color_from_ansi(color: AnsiColor) -> Color {
     }
 }
 
-fn normalize_newlines(content: &str) -> String {
-    let mut normalized = String::new();
+fn normalize_newlines(content: &str) -> Cow<'_, str> {
+    if !content.contains('\r') {
+        return Cow::Borrowed(content);
+    }
+
+    let mut normalized = String::with_capacity(content.len());
     let mut chars = content.chars().peekable();
 
     while let Some(ch) = chars.next() {
@@ -150,11 +159,15 @@ fn normalize_newlines(content: &str) -> String {
         }
     }
 
-    normalized
+    Cow::Owned(normalized)
 }
 
-fn sanitize_text(content: &str) -> String {
-    let mut sanitized = String::new();
+fn sanitize_text(content: &str) -> Cow<'_, str> {
+    if !content.chars().any(needs_sanitizing) {
+        return Cow::Borrowed(content);
+    }
+
+    let mut sanitized = String::with_capacity(content.len());
     let mut chars = content.chars().peekable();
 
     while let Some(ch) = chars.next() {
@@ -169,7 +182,17 @@ fn sanitize_text(content: &str) -> String {
         }
     }
 
-    sanitized
+    Cow::Owned(sanitized)
+}
+
+fn needs_sanitizing(ch: char) -> bool {
+    ch == '\t'
+        || ch == '\u{009b}'
+        || matches!(
+            ch,
+            '\u{0090}' | '\u{0098}' | '\u{009d}' | '\u{009e}' | '\u{009f}'
+        )
+        || is_stripped_control(ch)
 }
 
 fn skip_c1_control_sequence(chars: &mut CharStream<'_>) {

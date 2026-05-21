@@ -1,5 +1,3 @@
-use std::hint::unreachable_unchecked;
-
 use super::{
     Line, Style, TextError,
     ansi::{self, ParseMode},
@@ -17,7 +15,7 @@ impl Span {
     /// Creates a span from plain content and a style.
     pub fn new(content: impl Into<String>, style: Style) -> Result<Self, TextError> {
         let content = content.into();
-        validate_structural_content(&content)?;
+        Self::validate_content(&content)?;
         Ok(Self { content, style })
     }
 
@@ -39,18 +37,24 @@ impl Span {
         single_span(ansi::parse_text(content.as_ref(), ParseMode::Ansi)?)
     }
 
-    /// Creates a span without returning validation errors.
-    ///
-    /// # Safety
-    /// Callers must ensure the content does not contain structural terminal
-    /// content such as newlines, tabs, carriage returns, ANSI escapes, or
-    /// unsupported control characters. Passing invalid content violates this
-    /// function's safety preconditions and may trigger undefined behavior.
-    pub(crate) unsafe fn new_unchecked(content: impl Into<String>, style: Style) -> Self {
-        match Self::new(content, style) {
-            Ok(this) => this,
-            Err(_) => unsafe { unreachable_unchecked() },
+    pub(crate) fn validate_content(content: &str) -> Result<(), TextError> {
+        if content
+            .chars()
+            .any(|ch| ch == '\n' || ch == '\r' || ch == '\t' || ch == '\x1b' || ch.is_control())
+        {
+            return Err(TextError::StructuralContent);
         }
+
+        Ok(())
+    }
+
+    /// Creates a span from content that has already been validated by an owning type.
+    ///
+    /// This keeps invariant-preserving constructors terse without relying on
+    /// unchecked undefined behavior if a future caller breaks the invariant.
+    pub(crate) fn from_trusted_content(content: impl Into<String>, style: Style) -> Self {
+        Self::new(content, style)
+            .expect("trusted span content must not contain structural terminal content")
     }
 
     /// Returns this span's text content.
@@ -82,15 +86,4 @@ fn single_span(lines: Vec<Line>) -> Result<Span, TextError> {
     }
 
     Ok(span)
-}
-
-fn validate_structural_content(content: &str) -> Result<(), TextError> {
-    if content
-        .chars()
-        .any(|ch| ch == '\n' || ch == '\r' || ch == '\t' || ch == '\x1b' || ch.is_control())
-    {
-        return Err(TextError::StructuralContent);
-    }
-
-    Ok(())
 }

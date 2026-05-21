@@ -113,15 +113,16 @@ impl Render for Hr {
         }
 
         let content: String = std::iter::repeat_n(self.character, count).collect();
-        // SAFETY: `Hr` validates the repeated character before storing it, and
+        // `Hr` validates the repeated character before storing it, and
         // repetition cannot introduce structural terminal content.
-        let span = unsafe { Span::new_unchecked(content, self.style) };
+        let span = Span::from_trusted_content(content, self.style);
         Text::from_lines(vec![Line::from_spans(vec![span])])
     }
 }
 
 fn validate_character(character: char) -> Result<usize, TextError> {
-    Span::new(character.to_string(), Style::new())?;
+    let mut buffer = [0; 4];
+    Span::validate_content(character.encode_utf8(&mut buffer))?;
 
     let width = UnicodeWidthChar::width(character).unwrap_or(0);
     if width == 0 {

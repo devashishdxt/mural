@@ -69,7 +69,7 @@ impl<T> ListItem<T> {
     /// escapes, or other control characters.
     pub fn bullet(mut self, bullet: impl Into<String>) -> Result<Self, TextError> {
         let bullet = bullet.into();
-        self.bullet_width = validate_bullet(&bullet, self.bullet_style)?;
+        self.bullet_width = validate_bullet(&bullet)?;
         self.bullet = bullet;
         Ok(self)
     }
@@ -121,29 +121,33 @@ impl<T> ListItem<T> {
     }
 
     fn first_prefix_line(&self, fitting_gap: usize) -> Line {
-        let mut spans = vec![self.bullet_span()];
+        let mut spans = Vec::with_capacity(2);
+        spans.push(self.bullet_span());
         push_spaces(&mut spans, fitting_gap);
         Line::from_spans(spans)
     }
 
-    fn first_line(&self, content: &Line) -> Line {
-        let mut spans = vec![self.bullet_span()];
+    fn first_line(&self, content: Line) -> Line {
+        let content_spans = content.into_spans();
+        let mut spans = Vec::with_capacity(content_spans.len() + 2);
+        spans.push(self.bullet_span());
         push_spaces(&mut spans, self.gap);
-        spans.extend_from_slice(content.spans());
+        spans.extend(content_spans);
         Line::from_spans(spans)
     }
 
-    fn continuation_line(&self, content: &Line) -> Line {
-        let mut spans = Vec::new();
+    fn continuation_line(&self, content: Line) -> Line {
+        let content_spans = content.into_spans();
+        let mut spans = Vec::with_capacity(content_spans.len() + 1);
         push_spaces(&mut spans, self.prefix_width());
-        spans.extend_from_slice(content.spans());
+        spans.extend(content_spans);
         Line::from_spans(spans)
     }
 
     fn bullet_span(&self) -> Span {
-        // SAFETY: `ListItem` validates bullet content before storing it, and the
+        // `ListItem` validates bullet content before storing it, and the
         // default bullet is static non-structural text.
-        unsafe { Span::new_unchecked(self.bullet.clone(), self.bullet_style) }
+        Span::from_trusted_content(self.bullet.clone(), self.bullet_style)
     }
 }
 
@@ -168,24 +172,21 @@ impl<T: Render> Render for ListItem<T> {
                 .content
                 .render(content_width as u16)
                 .into_wrapped(content_width);
-            if content.lines().is_empty() {
+            let content_lines = content.into_lines();
+            if content_lines.is_empty() {
                 return Text::empty();
             }
 
-            Text::from_lines(
-                content
-                    .lines()
-                    .iter()
-                    .enumerate()
-                    .map(|(index, line)| {
-                        if index == 0 {
-                            self.first_line(line)
-                        } else {
-                            self.continuation_line(line)
-                        }
-                    })
-                    .collect(),
-            )
+            let mut lines = Vec::with_capacity(content_lines.len());
+            for (index, line) in content_lines.into_iter().enumerate() {
+                if index == 0 {
+                    lines.push(self.first_line(line));
+                } else {
+                    lines.push(self.continuation_line(line));
+                }
+            }
+
+            Text::from_lines(lines)
         }
     }
 
@@ -199,12 +200,11 @@ fn push_spaces(spans: &mut Vec<Span>, width: usize) {
         return;
     }
 
-    // SAFETY: Repeated spaces cannot contain structural terminal content.
-    spans.push(unsafe { Span::new_unchecked(" ".repeat(width), Style::new()) });
+    spans.push(Span::from_trusted_content(" ".repeat(width), Style::new()));
 }
 
-fn validate_bullet(bullet: &str, style: Style) -> Result<usize, TextError> {
-    Span::new(bullet.to_owned(), style)?;
+fn validate_bullet(bullet: &str) -> Result<usize, TextError> {
+    Span::validate_content(bullet)?;
 
     let width = UnicodeWidthStr::width(bullet);
     if width == 0 {
