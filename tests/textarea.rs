@@ -1,6 +1,6 @@
 use mural::{
     Color, KeyCode, KeyEvent, KeyModifiers, KeyOutcome, Line, Render, Span, Style, TextError,
-    Textarea, textarea,
+    Textarea, padding, textarea,
 };
 
 #[test]
@@ -236,9 +236,9 @@ fn textarea_word_movement_resets_preferred_visual_column() {
     let mut input = Textarea::new();
     input.set_value("abcde\nfghij").set_cursor(4);
 
-    input.move_visual_down(5);
+    input.move_visual_down_with_width(5);
     input.move_word_right();
-    input.move_visual_up(5);
+    input.move_visual_up_with_width(5);
 
     assert_eq!(input.cursor(), 8);
 }
@@ -344,9 +344,9 @@ fn textarea_moves_to_source_line_and_visual_row_boundaries() {
     assert_eq!(input.cursor(), input.value().len());
 
     input.set_cursor(4); // first source line, second visual row at width 5.
-    input.move_to_visual_row_start(5);
+    input.move_to_visual_row_start_with_width(5);
     assert_eq!(input.cursor(), 3);
-    input.move_to_visual_row_end(5);
+    input.move_to_visual_row_end_with_width(5);
     assert_eq!(input.cursor(), 5);
 }
 
@@ -356,10 +356,79 @@ fn textarea_moves_vertically_by_visual_rows_preserving_column() {
     input.set_value("abcde\nfghij");
     input.set_cursor(4);
 
-    input.move_visual_down(5);
+    input.move_visual_down_with_width(5);
     assert_eq!(input.cursor(), 7);
-    input.move_visual_up(5);
+    input.move_visual_up_with_width(5);
     assert_eq!(input.cursor(), 4);
+}
+
+#[test]
+fn textarea_visual_navigation_uses_width_learned_through_padding_render() {
+    let mut padded = padding(Textarea::new()).left(1).right(1);
+    padded.content_mut().set_value("abcde\nfghij").set_cursor(4);
+
+    padded.render(7);
+
+    padded.content_mut().move_visual_down();
+    assert_eq!(padded.content().cursor(), 7);
+}
+
+#[test]
+fn textarea_key_navigation_uses_last_rendered_width() {
+    let mut input = Textarea::new();
+    input.set_value("abcde\nfghij").set_cursor(4);
+    input.render(5);
+
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Down)),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.cursor(), 7);
+}
+
+#[test]
+fn textarea_keeps_navigation_width_when_value_reset_clears_scroll() {
+    let mut input = Textarea::new();
+    input.render(5);
+    input.set_value("abcde\nfghij").set_cursor(4);
+
+    input.move_visual_down();
+
+    assert_eq!(input.cursor(), 7);
+}
+
+#[test]
+fn textarea_navigation_before_first_render_uses_unwrapped_width() {
+    let mut input = Textarea::new();
+    input.set_value("abcde\nfghij").set_cursor(4);
+
+    input.move_visual_down();
+
+    assert_eq!(input.cursor(), 10);
+}
+
+#[test]
+fn textarea_navigation_remembers_too_narrow_render_width() {
+    let mut input = Textarea::new();
+    input.set_value("abcde\nfghij").set_cursor(4);
+
+    assert!(input.render(0).lines().is_empty());
+    input.move_visual_down();
+
+    assert_eq!(input.cursor(), 6);
+}
+
+#[test]
+fn textarea_explicit_width_navigation_does_not_replace_rendered_width() {
+    let mut input = Textarea::new();
+    input.set_value("abcde\nfghij").set_cursor(4);
+    input.render(5);
+
+    input.move_visual_down_with_width(u16::MAX);
+    assert_eq!(input.cursor(), 10);
+
+    input.set_cursor(4).move_visual_down();
+    assert_eq!(input.cursor(), 7);
 }
 
 #[test]
@@ -367,21 +436,18 @@ fn textarea_handles_basic_text_entry_and_submit_keys() {
     let mut input = Textarea::new();
 
     assert_eq!(
-        input.handle_key_event(KeyEvent::new(KeyCode::Char('a')), 20),
+        input.handle_key_event(KeyEvent::new(KeyCode::Char('a'))),
         KeyOutcome::Changed
     );
     assert_eq!(input.value(), "a");
     assert_eq!(
-        input.handle_key_event(KeyEvent::new(KeyCode::Enter), 20),
+        input.handle_key_event(KeyEvent::new(KeyCode::Enter)),
         KeyOutcome::Submit
     );
     assert_eq!(input.value(), "a");
 
     assert_eq!(
-        input.handle_key_event(
-            KeyEvent::new(KeyCode::Enter).modifier(KeyModifiers::ALT),
-            20,
-        ),
+        input.handle_key_event(KeyEvent::new(KeyCode::Enter).modifier(KeyModifiers::ALT)),
         KeyOutcome::Changed
     );
     assert_eq!(input.value(), "a\n");
@@ -393,16 +459,13 @@ fn textarea_handles_default_navigation_and_deletion_keys() {
     input.set_value("hello world");
 
     assert_eq!(
-        input.handle_key_event(
-            KeyEvent::new(KeyCode::Left).modifier(KeyModifiers::CONTROL),
-            20,
-        ),
+        input.handle_key_event(KeyEvent::new(KeyCode::Left).modifier(KeyModifiers::CONTROL)),
         KeyOutcome::Changed
     );
     assert_eq!(input.cursor(), 6);
 
     assert_eq!(
-        input.handle_key_event(KeyEvent::new(KeyCode::Backspace), 20),
+        input.handle_key_event(KeyEvent::new(KeyCode::Backspace)),
         KeyOutcome::Changed
     );
     assert_eq!(input.value(), "helloworld");
@@ -410,13 +473,13 @@ fn textarea_handles_default_navigation_and_deletion_keys() {
 
     input.move_to_buffer_start();
     assert_eq!(
-        input.handle_key_event(KeyEvent::new(KeyCode::Left), 20),
+        input.handle_key_event(KeyEvent::new(KeyCode::Left)),
         KeyOutcome::Unchanged
     );
 
     input.move_to_buffer_end();
     assert_eq!(
-        input.handle_key_event(KeyEvent::new(KeyCode::Delete), 20),
+        input.handle_key_event(KeyEvent::new(KeyCode::Delete)),
         KeyOutcome::Unchanged
     );
 }
@@ -428,21 +491,17 @@ fn textarea_ignores_releases_unsupported_keys_and_command_modified_text() {
     assert_eq!(
         input.handle_key_event(
             KeyEvent::new(KeyCode::Char('x')).kind(mural::KeyEventKind::Release),
-            20,
         ),
         KeyOutcome::Ignored
     );
     assert_eq!(input.value(), "");
 
     assert_eq!(
-        input.handle_key_event(
-            KeyEvent::new(KeyCode::Char('x')).modifier(KeyModifiers::ALT),
-            20,
-        ),
+        input.handle_key_event(KeyEvent::new(KeyCode::Char('x')).modifier(KeyModifiers::ALT)),
         KeyOutcome::Ignored
     );
     assert_eq!(
-        input.handle_key_event(KeyEvent::new(KeyCode::Esc), 20),
+        input.handle_key_event(KeyEvent::new(KeyCode::Esc)),
         KeyOutcome::Ignored
     );
     assert_eq!(input.value(), "");
@@ -454,13 +513,13 @@ fn textarea_handles_line_and_visual_boundary_shortcuts() {
     input.set_value("abcde\nfghij").set_cursor(4);
 
     assert_eq!(
-        input.handle_key_event(KeyEvent::new(KeyCode::Home), 5),
+        input.handle_key_event_with_width(KeyEvent::new(KeyCode::Home), 5),
         KeyOutcome::Changed
     );
     assert_eq!(input.cursor(), 3);
 
     assert_eq!(
-        input.handle_key_event(
+        input.handle_key_event_with_width(
             KeyEvent::new(KeyCode::Char('e')).modifier(KeyModifiers::CONTROL),
             5,
         ),
@@ -470,7 +529,7 @@ fn textarea_handles_line_and_visual_boundary_shortcuts() {
 
     input.set_cursor(8);
     assert_eq!(
-        input.handle_key_event(
+        input.handle_key_event_with_width(
             KeyEvent::new(KeyCode::Char('a')).modifier(KeyModifiers::CONTROL),
             5,
         ),

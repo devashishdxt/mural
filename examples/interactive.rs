@@ -85,7 +85,7 @@ fn run_event_loop(
                 if should_quit(key) {
                     break;
                 }
-                dirty |= handle_input_key(session.terminal_mut(), key, *size)?;
+                dirty |= handle_input_key(session.terminal_mut(), key)?;
             }
             Event::Resize(width, height) => {
                 *size = Size::new(width, height);
@@ -110,11 +110,10 @@ fn run_event_loop(
 fn handle_input_key(
     terminal: &mut Terminal<StdoutBackend<io::Stdout>>,
     key: CrosstermKeyEvent,
-    size: Size,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let outcome = terminal
         .pinned_block_mut::<Textarea>(ID_INPUT)?
-        .handle_key_event(key, size.width());
+        .handle_key_event(key);
 
     match outcome {
         KeyOutcome::Submit => submit_input(terminal)?,

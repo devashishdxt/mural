@@ -34,7 +34,8 @@ pub struct Textarea {
     placeholder_style: Style,
     max_height: Option<usize>,
     scroll_row: Cell<usize>,
-    last_render_width: Cell<Option<usize>>,
+    scroll_width: Cell<Option<usize>>,
+    last_rendered_width: Cell<Option<usize>>,
     preferred_visual_column: Cell<Option<usize>>,
 }
 
@@ -53,7 +54,8 @@ impl Textarea {
             placeholder_style: Style::new(),
             max_height: Some(DEFAULT_MAX_HEIGHT),
             scroll_row: Cell::new(0),
-            last_render_width: Cell::new(None),
+            scroll_width: Cell::new(None),
+            last_rendered_width: Cell::new(None),
             preferred_visual_column: Cell::new(None),
         }
     }
@@ -306,18 +308,33 @@ impl Textarea {
         self.max_height
     }
 
-    /// Moves the cursor one visual row up for the given terminal width.
-    pub fn move_visual_up(&mut self, width: u16) -> &mut Self {
+    /// Moves the cursor one visual row up using the last rendered width.
+    pub fn move_visual_up(&mut self) -> &mut Self {
+        self.move_visual_up_with_width(self.navigation_width())
+    }
+
+    /// Moves the cursor one visual row up for the given textarea render width.
+    pub fn move_visual_up_with_width(&mut self, width: u16) -> &mut Self {
         self.move_visual_rows(width, -1)
     }
 
-    /// Moves the cursor one visual row down for the given terminal width.
-    pub fn move_visual_down(&mut self, width: u16) -> &mut Self {
+    /// Moves the cursor one visual row down using the last rendered width.
+    pub fn move_visual_down(&mut self) -> &mut Self {
+        self.move_visual_down_with_width(self.navigation_width())
+    }
+
+    /// Moves the cursor one visual row down for the given textarea render width.
+    pub fn move_visual_down_with_width(&mut self, width: u16) -> &mut Self {
         self.move_visual_rows(width, 1)
     }
 
-    /// Moves the cursor to the start of the current visual row.
-    pub fn move_to_visual_row_start(&mut self, width: u16) -> &mut Self {
+    /// Moves the cursor to the start of the current visual row using the last rendered width.
+    pub fn move_to_visual_row_start(&mut self) -> &mut Self {
+        self.move_to_visual_row_start_with_width(self.navigation_width())
+    }
+
+    /// Moves the cursor to the start of the current visual row for the given textarea render width.
+    pub fn move_to_visual_row_start_with_width(&mut self, width: u16) -> &mut Self {
         let rows = self.visual_rows_for_width(width);
         let index = visual_cursor_row(&rows, self.cursor);
         self.cursor = rows.get(index).map(|row| row.start).unwrap_or(0);
@@ -325,8 +342,13 @@ impl Textarea {
         self
     }
 
-    /// Moves the cursor to the end of the current visual row.
-    pub fn move_to_visual_row_end(&mut self, width: u16) -> &mut Self {
+    /// Moves the cursor to the end of the current visual row using the last rendered width.
+    pub fn move_to_visual_row_end(&mut self) -> &mut Self {
+        self.move_to_visual_row_end_with_width(self.navigation_width())
+    }
+
+    /// Moves the cursor to the end of the current visual row for the given textarea render width.
+    pub fn move_to_visual_row_end_with_width(&mut self, width: u16) -> &mut Self {
         let rows = self.visual_rows_for_width(width);
         let index = visual_cursor_row(&rows, self.cursor);
         self.cursor = rows
@@ -339,9 +361,10 @@ impl Textarea {
 
     /// Applies Mural's default textarea behavior for one key event.
     ///
-    /// `width` should match the width used to render the textarea; wrapped-row
-    /// movement depends on it. Press and repeat events are handled the same way.
-    /// Release events are ignored.
+    /// Wrapped-row movement uses the last width passed to [`Textarea::render`].
+    /// Before the first render, movement falls back to an effectively unwrapped
+    /// width. Press and repeat events are handled the same way. Release events
+    /// are ignored.
     ///
     /// Default behavior includes text insertion, grapheme-aware deletion,
     /// visual-row arrow movement, word movement with control/alt arrows,
@@ -349,7 +372,20 @@ impl Textarea {
     /// `Enter` submission, and newline insertion with alt-enter or shift-enter.
     /// Pre-handle application shortcuts before calling this method when you need
     /// custom behavior.
-    pub fn handle_key_event(&mut self, event: impl Into<KeyEvent>, width: u16) -> KeyOutcome {
+    pub fn handle_key_event(&mut self, event: impl Into<KeyEvent>) -> KeyOutcome {
+        self.handle_key_event_with_width(event, self.navigation_width())
+    }
+
+    /// Applies Mural's default textarea behavior for one key event using an explicit width.
+    ///
+    /// `width` should match the width used to render the textarea; wrapped-row
+    /// movement depends on it. Prefer [`Textarea::handle_key_event`] for normal
+    /// applications.
+    pub fn handle_key_event_with_width(
+        &mut self,
+        event: impl Into<KeyEvent>,
+        width: u16,
+    ) -> KeyOutcome {
         let event = event.into();
         let modifiers = event.modifiers();
         let code = event.code();
@@ -403,10 +439,10 @@ impl Textarea {
                 textarea.move_right();
             }),
             KeyCode::Up => self.changed_by(|textarea| {
-                textarea.move_visual_up(width);
+                textarea.move_visual_up_with_width(width);
             }),
             KeyCode::Down => self.changed_by(|textarea| {
-                textarea.move_visual_down(width);
+                textarea.move_visual_down_with_width(width);
             }),
             KeyCode::Home if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.changed_by(|textarea| {
@@ -419,10 +455,10 @@ impl Textarea {
                 })
             }
             KeyCode::Home => self.changed_by(|textarea| {
-                textarea.move_to_visual_row_start(width);
+                textarea.move_to_visual_row_start_with_width(width);
             }),
             KeyCode::End => self.changed_by(|textarea| {
-                textarea.move_to_visual_row_end(width);
+                textarea.move_to_visual_row_end_with_width(width);
             }),
             KeyCode::Tab => self.changed_by(|textarea| {
                 textarea.insert_char('\t');
@@ -473,7 +509,14 @@ impl Textarea {
 
     fn reset_scroll(&self) {
         self.scroll_row.set(0);
-        self.last_render_width.set(None);
+        self.scroll_width.set(None);
+    }
+
+    fn navigation_width(&self) -> u16 {
+        self.last_rendered_width
+            .get()
+            .map(|width| width as u16)
+            .unwrap_or(u16::MAX)
     }
 
     fn reset_preferred_visual_column(&self) {
@@ -545,20 +588,20 @@ impl Textarea {
 
     fn visible_start_row(&self, width: usize, row_count: usize, cursor_row: usize) -> usize {
         let Some(max_height) = self.max_height else {
-            self.last_render_width.set(Some(width));
+            self.scroll_width.set(Some(width));
             self.scroll_row.set(0);
             return 0;
         };
 
         if row_count <= max_height {
-            self.last_render_width.set(Some(width));
+            self.scroll_width.set(Some(width));
             self.scroll_row.set(0);
             return 0;
         }
 
         let max_scroll = row_count - max_height;
         let mut scroll_row = self.scroll_row.get().min(max_scroll);
-        if self.last_render_width.get() != Some(width) {
+        if self.scroll_width.get() != Some(width) {
             scroll_row = scroll_row.min(max_scroll);
         }
 
@@ -569,7 +612,7 @@ impl Textarea {
         }
         scroll_row = scroll_row.min(max_scroll);
 
-        self.last_render_width.set(Some(width));
+        self.scroll_width.set(Some(width));
         self.scroll_row.set(scroll_row);
         scroll_row
     }
@@ -670,7 +713,8 @@ impl PartialEq for Textarea {
             && self.placeholder_style == other.placeholder_style
             && self.max_height == other.max_height
             && self.scroll_row.get() == other.scroll_row.get()
-            && self.last_render_width.get() == other.last_render_width.get()
+            && self.scroll_width.get() == other.scroll_width.get()
+            && self.last_rendered_width.get() == other.last_rendered_width.get()
             && self.preferred_visual_column.get() == other.preferred_visual_column.get()
     }
 }
@@ -685,6 +729,7 @@ impl Default for Textarea {
 
 impl Render for Textarea {
     fn render(&self, width: u16) -> Text {
+        self.last_rendered_width.set(Some(usize::from(width)));
         let width = usize::from(width);
         if width == 0 || width < self.prompt_width {
             return Text::empty();
