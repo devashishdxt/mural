@@ -51,6 +51,7 @@
 pub mod backend;
 pub mod blocks;
 pub mod error;
+pub mod key;
 mod render;
 pub mod size;
 pub mod terminal;
@@ -60,6 +61,7 @@ pub use self::{
     backend::{Backend, FakeBackend, Operation, StdoutBackend},
     blocks::{Hr, ListItem, Padding, Spinner, Textarea, hr, list_item, padding, spinner, textarea},
     error::TerminalError,
+    key::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyOutcome},
     render::Render,
     size::Size,
     terminal::Terminal,

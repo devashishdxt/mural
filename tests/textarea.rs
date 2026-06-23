@@ -1,4 +1,7 @@
-use mural::{Color, Line, Render, Span, Style, TextError, Textarea, textarea};
+use mural::{
+    Color, KeyCode, KeyEvent, KeyModifiers, KeyOutcome, Line, Render, Span, Style, TextError,
+    Textarea, textarea,
+};
 
 #[test]
 fn textarea_convenience_and_defaults_render_empty_input_with_prompt_and_cursor() {
@@ -357,6 +360,123 @@ fn textarea_moves_vertically_by_visual_rows_preserving_column() {
     assert_eq!(input.cursor(), 7);
     input.move_visual_up(5);
     assert_eq!(input.cursor(), 4);
+}
+
+#[test]
+fn textarea_handles_basic_text_entry_and_submit_keys() {
+    let mut input = Textarea::new();
+
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Char('a')), 20),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.value(), "a");
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Enter), 20),
+        KeyOutcome::Submit
+    );
+    assert_eq!(input.value(), "a");
+
+    assert_eq!(
+        input.handle_key_event(
+            KeyEvent::new(KeyCode::Enter).modifier(KeyModifiers::ALT),
+            20,
+        ),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.value(), "a\n");
+}
+
+#[test]
+fn textarea_handles_default_navigation_and_deletion_keys() {
+    let mut input = Textarea::new();
+    input.set_value("hello world");
+
+    assert_eq!(
+        input.handle_key_event(
+            KeyEvent::new(KeyCode::Left).modifier(KeyModifiers::CONTROL),
+            20,
+        ),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.cursor(), 6);
+
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Backspace), 20),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.value(), "helloworld");
+    assert_eq!(input.cursor(), 5);
+
+    input.move_to_buffer_start();
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Left), 20),
+        KeyOutcome::Unchanged
+    );
+
+    input.move_to_buffer_end();
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Delete), 20),
+        KeyOutcome::Unchanged
+    );
+}
+
+#[test]
+fn textarea_ignores_releases_unsupported_keys_and_command_modified_text() {
+    let mut input = Textarea::new();
+
+    assert_eq!(
+        input.handle_key_event(
+            KeyEvent::new(KeyCode::Char('x')).kind(mural::KeyEventKind::Release),
+            20,
+        ),
+        KeyOutcome::Ignored
+    );
+    assert_eq!(input.value(), "");
+
+    assert_eq!(
+        input.handle_key_event(
+            KeyEvent::new(KeyCode::Char('x')).modifier(KeyModifiers::ALT),
+            20,
+        ),
+        KeyOutcome::Ignored
+    );
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Esc), 20),
+        KeyOutcome::Ignored
+    );
+    assert_eq!(input.value(), "");
+}
+
+#[test]
+fn textarea_handles_line_and_visual_boundary_shortcuts() {
+    let mut input = Textarea::new();
+    input.set_value("abcde\nfghij").set_cursor(4);
+
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Home), 5),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.cursor(), 3);
+
+    assert_eq!(
+        input.handle_key_event(
+            KeyEvent::new(KeyCode::Char('e')).modifier(KeyModifiers::CONTROL),
+            5,
+        ),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.cursor(), 5);
+
+    input.set_cursor(8);
+    assert_eq!(
+        input.handle_key_event(
+            KeyEvent::new(KeyCode::Char('a')).modifier(KeyModifiers::CONTROL),
+            5,
+        ),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.cursor(), 6);
 }
 
 fn plain_lines(text: &mural::Text) -> Vec<String> {

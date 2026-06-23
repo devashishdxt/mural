@@ -4,7 +4,10 @@ use ansi_str::AnsiStr;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::{Line, Render, Span, Style, Text, TextError};
+use crate::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyOutcome, Line, Render, Span, Style, Text,
+    TextError,
+};
 
 use super::{layout::push_spaces, validation::validate_non_empty_display_text};
 
@@ -334,6 +337,105 @@ impl Textarea {
         self
     }
 
+    /// Applies Mural's default textarea behavior for one key event.
+    ///
+    /// `width` should match the width used to render the textarea; wrapped-row
+    /// movement depends on it. Press and repeat events are handled the same way.
+    /// Release events are ignored.
+    ///
+    /// Default behavior includes text insertion, grapheme-aware deletion,
+    /// visual-row arrow movement, word movement with control/alt arrows,
+    /// readline-style control-A/control-E source-line movement, tab insertion,
+    /// `Enter` submission, and newline insertion with alt-enter or shift-enter.
+    /// Pre-handle application shortcuts before calling this method when you need
+    /// custom behavior.
+    pub fn handle_key_event(&mut self, event: impl Into<KeyEvent>, width: u16) -> KeyOutcome {
+        let event = event.into();
+        let modifiers = event.modifiers();
+        let code = event.code();
+
+        match event.kind_value() {
+            KeyEventKind::Release => return KeyOutcome::Ignored,
+            KeyEventKind::Press | KeyEventKind::Repeat => {}
+        }
+
+        match code {
+            KeyCode::Char('a') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.changed_by(|textarea| {
+                    textarea.move_to_line_start();
+                })
+            }
+            KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.changed_by(|textarea| {
+                    textarea.move_to_line_end();
+                })
+            }
+            KeyCode::Char(ch) if text_insertion_modifiers(modifiers) => {
+                self.changed_by(|textarea| {
+                    textarea.insert_char(ch);
+                })
+            }
+            KeyCode::Enter if modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => self
+                .changed_by(|textarea| {
+                    textarea.insert_newline();
+                }),
+            KeyCode::Enter => KeyOutcome::Submit,
+            KeyCode::Backspace => self.changed_by(|textarea| {
+                textarea.backspace();
+            }),
+            KeyCode::Delete => self.changed_by(|textarea| {
+                textarea.delete();
+            }),
+            KeyCode::Left if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                self.changed_by(|textarea| {
+                    textarea.move_word_left();
+                })
+            }
+            KeyCode::Right if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                self.changed_by(|textarea| {
+                    textarea.move_word_right();
+                })
+            }
+            KeyCode::Left => self.changed_by(|textarea| {
+                textarea.move_left();
+            }),
+            KeyCode::Right => self.changed_by(|textarea| {
+                textarea.move_right();
+            }),
+            KeyCode::Up => self.changed_by(|textarea| {
+                textarea.move_visual_up(width);
+            }),
+            KeyCode::Down => self.changed_by(|textarea| {
+                textarea.move_visual_down(width);
+            }),
+            KeyCode::Home if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.changed_by(|textarea| {
+                    textarea.move_to_buffer_start();
+                })
+            }
+            KeyCode::End if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.changed_by(|textarea| {
+                    textarea.move_to_buffer_end();
+                })
+            }
+            KeyCode::Home => self.changed_by(|textarea| {
+                textarea.move_to_visual_row_start(width);
+            }),
+            KeyCode::End => self.changed_by(|textarea| {
+                textarea.move_to_visual_row_end(width);
+            }),
+            KeyCode::Tab => self.changed_by(|textarea| {
+                textarea.insert_char('\t');
+            }),
+            KeyCode::Char(_)
+            | KeyCode::BackTab
+            | KeyCode::Esc
+            | KeyCode::PageUp
+            | KeyCode::PageDown
+            | KeyCode::Unsupported => KeyOutcome::Ignored,
+        }
+    }
+
     fn move_visual_rows(&mut self, width: u16, delta: isize) -> &mut Self {
         let rows = self.visual_rows_for_width(width);
         if rows.is_empty() {
@@ -356,6 +458,17 @@ impl Textarea {
         let width = usize::from(width);
         let content_width = width.saturating_sub(self.prefix_width()).max(1);
         visual_rows(&self.value, content_width)
+    }
+
+    fn changed_by(&mut self, action: impl FnOnce(&mut Self)) -> KeyOutcome {
+        let before_value = self.value.clone();
+        let before_cursor = self.cursor;
+        action(self);
+        if self.value == before_value && self.cursor == before_cursor {
+            KeyOutcome::Unchanged
+        } else {
+            KeyOutcome::Changed
+        }
     }
 
     fn reset_scroll(&self) {
@@ -759,6 +872,16 @@ impl CursorUnit {
 struct StyledPiece {
     content: String,
     style: Style,
+}
+
+fn text_insertion_modifiers(modifiers: KeyModifiers) -> bool {
+    !modifiers.intersects(
+        KeyModifiers::ALT
+            | KeyModifiers::CONTROL
+            | KeyModifiers::SUPER
+            | KeyModifiers::META
+            | KeyModifiers::HYPER,
+    )
 }
 
 fn visual_rows(value: &str, content_width: usize) -> Vec<VisualRow> {
