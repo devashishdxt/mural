@@ -1,8 +1,9 @@
+use std::{cell::RefCell, io, rc::Rc};
+
 use mural::{
     Backend, Line, Size, Terminal, TerminalError, Text,
     backend::fake::{FakeBackend, Operation},
 };
-use std::{cell::RefCell, io, rc::Rc};
 
 #[derive(Clone, Debug)]
 struct SharedLogBackend {

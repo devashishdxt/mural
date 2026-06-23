@@ -1,7 +1,8 @@
 //! In-memory backend for tests, examples, and deterministic demonstrations.
 
-use crate::{Backend, Line, Size};
 use std::io;
+
+use crate::{Backend, Line, Size};
 
 /// A backend operation recorded by [`FakeBackend`].
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -8,8 +8,10 @@ mod spinner;
 mod textarea;
 mod validation;
 
-pub use hr::{Hr, hr};
-pub use list_item::{ListItem, list_item};
-pub use padding::{Padding, padding};
-pub use spinner::{Spinner, spinner};
-pub use textarea::{Textarea, textarea};
+pub use self::{
+    hr::{Hr, hr},
+    list_item::{ListItem, list_item},
+    padding::{Padding, padding},
+    spinner::{Spinner, spinner},
+    textarea::{Textarea, textarea},
+};

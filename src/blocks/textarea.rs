@@ -1,9 +1,12 @@
-use super::{layout::push_spaces, validation::validate_non_empty_display_text};
-use crate::{Line, Render, Span, Style, Text, TextError};
-use ansi_str::AnsiStr;
 use std::cell::Cell;
+
+use ansi_str::AnsiStr;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+use crate::{Line, Render, Span, Style, Text, TextError};
+
+use super::{layout::push_spaces, validation::validate_non_empty_display_text};
 
 const DEFAULT_PROMPT: &str = "›";
 const DEFAULT_GAP: usize = 1;

@@ -1,8 +1,9 @@
+use std::{thread, time::Duration};
+
 use mural::{
     Color, Hr, Line, ListItem, Padding, Render, Size, Span, Spinner, Style, Terminal, Text,
     Textarea,
 };
-use std::{thread, time::Duration};
 
 const FPS: u64 = 15;
 const FRAME_DELAY: Duration = Duration::from_millis(1_000 / FPS);

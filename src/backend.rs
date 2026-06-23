@@ -3,14 +3,17 @@
 //! Use [`StdoutBackend`] for real terminal output, [`FakeBackend`] for examples
 //! and tests, or implement [`Backend`] to adapt another terminal abstraction.
 
-use crate::{Line, Size};
 use std::io;
+
+use crate::{Line, Size};
 
 pub mod fake;
 pub mod stdout;
 
-pub use fake::{FakeBackend, Operation};
-pub use stdout::StdoutBackend;
+pub use self::{
+    fake::{FakeBackend, Operation},
+    stdout::StdoutBackend,
+};
 
 /// Low-level terminal operations required by the renderer.
 ///

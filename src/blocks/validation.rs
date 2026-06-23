@@ -1,5 +1,6 @@
-use crate::{Span, TextError};
 use unicode_width::UnicodeWidthStr;
+
+use crate::{Span, TextError};
 
 pub(super) fn validate_non_empty_display_text(content: &str) -> Result<usize, TextError> {
     Span::validate_content(content)?;

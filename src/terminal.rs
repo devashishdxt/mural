@@ -1,9 +1,8 @@
 //! High-level renderer lifecycle and block management.
 
-use crate::{Backend, Line, Render, Size, StdoutBackend, TerminalError};
 use std::{any::type_name, io};
 
-use crate::render::RenderBlock;
+use crate::{Backend, Line, Render, Size, StdoutBackend, TerminalError, render::RenderBlock};
 
 struct BlockEntry {
     id: Option<String>,

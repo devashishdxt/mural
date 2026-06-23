@@ -1,6 +1,8 @@
-use super::{layout::push_spaces, validation::validate_non_empty_display_text};
-use crate::{Line, Render, Span, Style, Text, TextError};
 use unicode_width::UnicodeWidthStr;
+
+use crate::{Line, Render, Span, Style, Text, TextError};
+
+use super::{layout::push_spaces, validation::validate_non_empty_display_text};
 
 const DEFAULT_BULLET: &str = "•";
 const DEFAULT_GAP: usize = 1;

@@ -1,5 +1,6 @@
-use crate::Text;
 use std::any::{Any, type_name};
+
+use crate::Text;
 
 /// A value that can render itself into terminal text for a printable width.
 ///

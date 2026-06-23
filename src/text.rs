@@ -13,10 +13,7 @@ mod modifiers;
 mod span;
 mod style;
 
-pub use body::Text;
-pub use color::Color;
-pub use error::TextError;
-pub use line::Line;
-pub use modifiers::Modifiers;
-pub use span::Span;
-pub use style::Style;
+pub use self::{
+    body::Text, color::Color, error::TextError, line::Line, modifiers::Modifiers, span::Span,
+    style::Style,
+};

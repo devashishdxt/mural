@@ -1,6 +1,8 @@
-use super::{Color, Line, Span, Style, TextError};
-use ansi_str::{AnsiStr, Color as AnsiColor, Style as AnsiStyle, get_blocks};
 use std::{borrow::Cow, iter::Peekable, str::Chars};
+
+use ansi_str::{AnsiStr, Color as AnsiColor, Style as AnsiStyle, get_blocks};
+
+use super::{Color, Line, Span, Style, TextError};
 
 const TAB_REPLACEMENT: &str = "    ";
 type CharStream<'a> = Peekable<Chars<'a>>;

@@ -1,9 +1,5 @@
-use super::{
-    Line, Span, Style, TextError,
-    ansi::{self, ParseMode},
-};
-use crate::Render;
 use std::borrow::Cow;
+
 use textwrap::{
     Options,
     core::{Fragment, Word},
@@ -12,6 +8,13 @@ use textwrap::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+use crate::Render;
+
+use super::{
+    Line, Span, Style, TextError,
+    ansi::{self, ParseMode},
+};
 
 /// Multi-line styled text rendered by terminal blocks.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,7 +1,10 @@
-use super::{layout::push_spaces, validation::validate_non_empty_display_text};
-use crate::{Line, Render, Span, Style, Text, TextError};
 use std::cell::Cell;
+
 use unicode_width::UnicodeWidthStr;
+
+use crate::{Line, Render, Span, Style, Text, TextError};
+
+use super::{layout::push_spaces, validation::validate_non_empty_display_text};
 
 const DEFAULT_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const DEFAULT_SUCCESS_MARKER: &str = "✓";

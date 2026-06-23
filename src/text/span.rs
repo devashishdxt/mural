@@ -1,8 +1,9 @@
+use unicode_width::UnicodeWidthStr;
+
 use super::{
     Line, Style, TextError,
     ansi::{self, ParseMode},
 };
-use unicode_width::UnicodeWidthStr;
 
 /// A contiguous run of text with one style.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,12 +1,14 @@
 //! Crossterm-backed stdout backend for real terminal output.
 
-use crate::{Backend, Color, Line, Modifiers, Size, Style};
+use std::io::{self, Write};
+
 use crossterm::{
     cursor, execute, queue,
     style::{Attribute, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal,
 };
-use std::io::{self, Write};
+
+use crate::{Backend, Color, Line, Modifiers, Size, Style};
 
 const MODIFIER_ATTRIBUTES: [(Modifiers, Attribute); 5] = [
     (Modifiers::BOLD, Attribute::Bold),
@@ -122,7 +124,7 @@ impl<W: Write> Backend for StdoutBackend<W> {
     }
 
     fn newline(&mut self) -> io::Result<()> {
-        self.writer.write_all(b"\n")
+        self.writer.write_all(b"\r\n")
     }
 
     fn clear(&mut self) -> io::Result<()> {

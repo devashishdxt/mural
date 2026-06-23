@@ -1,8 +1,9 @@
+use std::{cell::RefCell, rc::Rc};
+
 use mural::{
     Line, Render, Size, Terminal, TerminalError, Text,
     backend::fake::{FakeBackend, Operation},
 };
-use std::{cell::RefCell, rc::Rc};
 
 #[derive(Debug)]
 struct CounterBlock {

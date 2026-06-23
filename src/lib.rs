@@ -56,12 +56,12 @@ pub mod size;
 pub mod terminal;
 pub mod text;
 
-pub use backend::{Backend, FakeBackend, Operation, StdoutBackend};
-pub use blocks::{
-    Hr, ListItem, Padding, Spinner, Textarea, hr, list_item, padding, spinner, textarea,
+pub use self::{
+    backend::{Backend, FakeBackend, Operation, StdoutBackend},
+    blocks::{Hr, ListItem, Padding, Spinner, Textarea, hr, list_item, padding, spinner, textarea},
+    error::TerminalError,
+    render::Render,
+    size::Size,
+    terminal::Terminal,
+    text::{Color, Line, Modifiers, Span, Style, Text, TextError},
 };
-pub use error::TerminalError;
-pub use render::Render;
-pub use size::Size;
-pub use terminal::Terminal;
-pub use text::{Color, Line, Modifiers, Span, Style, Text, TextError};

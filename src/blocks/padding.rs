@@ -1,5 +1,6 @@
-use super::layout::{empty_lines, push_spaces};
 use crate::{Line, Render, Text};
+
+use super::layout::{empty_lines, push_spaces};
 
 /// Creates a padding block around renderable content.
 ///

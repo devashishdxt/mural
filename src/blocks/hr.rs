@@ -1,5 +1,6 @@
-use crate::{Line, Render, Span, Style, Text, TextError};
 use unicode_width::UnicodeWidthChar;
+
+use crate::{Line, Render, Span, Style, Text, TextError};
 
 const DEFAULT_CHARACTER: char = '─';
 
