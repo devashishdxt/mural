@@ -232,6 +232,16 @@ fn textarea_word_movement_falls_back_to_buffer_edges_without_words() {
 }
 
 #[test]
+fn textarea_visual_navigation_follows_word_wrapped_rows() {
+    let mut input = Textarea::new();
+    input.set_value("hello world").set_cursor(2);
+
+    input.move_visual_down_with_width(12);
+
+    assert_eq!(input.cursor(), 8);
+}
+
+#[test]
 fn textarea_word_movement_resets_preferred_visual_column() {
     let mut input = Textarea::new();
     input.set_value("abcde\nfghij").set_cursor(4);
@@ -279,6 +289,45 @@ fn textarea_renders_multiline_wrapped_content_with_hanging_prompt() {
             .iter()
             .all(|line| line.display_width() <= 5)
     );
+}
+
+#[test]
+fn textarea_wraps_words_like_text_wrapping() {
+    let mut input = Textarea::new();
+    input.set_value("hello world");
+
+    let rendered = input.render(12);
+
+    assert_eq!(plain_lines(&rendered), vec!["› hello", "  world "]);
+    assert!(
+        rendered
+            .lines()
+            .iter()
+            .all(|line| line.display_width() <= 12)
+    );
+}
+
+#[test]
+fn textarea_keeps_cursor_visible_on_hidden_wrap_whitespace() {
+    let mut input = Textarea::new();
+    input.set_value("hello world").set_cursor(5);
+
+    let rendered = input.render(12);
+
+    assert_eq!(plain_lines(&rendered), vec!["› hello ", "  world"]);
+    assert_eq!(
+        rendered.lines()[0].spans().last().unwrap().style(),
+        Style::new().reversed()
+    );
+}
+
+#[test]
+fn textarea_wraps_placeholder_like_text_content() {
+    let input = Textarea::new().placeholder("hello world").unwrap();
+
+    let rendered = input.render(12);
+
+    assert_eq!(plain_lines(&rendered), vec!["›  hello", "  world"]);
 }
 
 #[test]

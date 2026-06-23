@@ -12,6 +12,7 @@ mod line;
 mod modifiers;
 mod span;
 mod style;
+pub(crate) mod wrap;
 
 pub use self::{
     body::Text, color::Color, error::TextError, line::Line, modifiers::Modifiers, span::Span,

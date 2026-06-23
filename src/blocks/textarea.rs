@@ -7,6 +7,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyOutcome, Line, Render, Span, Style, Text,
     TextError,
+    text::wrap::{self, SourceRange, WrappedFragment},
 };
 
 use super::{layout::push_spaces, validation::validate_non_empty_display_text};
@@ -619,21 +620,50 @@ impl Textarea {
 
     fn content_layout(&self, content_width: usize) -> ContentLayout {
         let mut rows = Vec::new();
-        let mut row = ContentRow::default();
 
         if self.value.is_empty() {
+            let mut row = ContentRow::default();
             row.push_unit(
                 CursorUnit::space(self.cursor_style),
                 content_width,
                 &mut rows,
             );
             if let Some(placeholder) = &self.placeholder {
-                for grapheme in placeholder.graphemes(true) {
-                    row.push_unit(
-                        CursorUnit::text(grapheme, self.placeholder_style),
-                        content_width,
-                        &mut rows,
-                    );
+                let placeholder_width = content_width.saturating_sub(1).max(1);
+                let placeholder_rows = wrapped_source_rows(placeholder, placeholder_width);
+                let mut placeholder_cursor_rendered = false;
+                for (index, placeholder_row) in placeholder_rows.iter().enumerate() {
+                    if index > 0 {
+                        rows.push(row.finish());
+                        row = ContentRow::default();
+                    }
+                    for (fragment_index, fragment) in placeholder_row.fragments.iter().enumerate() {
+                        push_rendered_range(
+                            &mut row,
+                            placeholder,
+                            fragment.word_range,
+                            usize::MAX,
+                            self.cursor_style,
+                            self.placeholder_style,
+                            &mut placeholder_cursor_rendered,
+                        );
+                        if fragment_index + 1 < placeholder_row.fragments.len() {
+                            push_rendered_range(
+                                &mut row,
+                                placeholder,
+                                fragment.whitespace_range,
+                                usize::MAX,
+                                self.cursor_style,
+                                self.placeholder_style,
+                                &mut placeholder_cursor_rendered,
+                            );
+                        } else if !fragment.penalty.is_empty() {
+                            row.push_unit_unwrapped(CursorUnit::text(
+                                &fragment.penalty,
+                                self.placeholder_style,
+                            ));
+                        }
+                    }
                 }
             }
             rows.push(row.finish());
@@ -643,59 +673,62 @@ impl Textarea {
             };
         }
 
+        let source_rows = wrapped_source_rows(&self.value, content_width);
         let mut cursor_rendered = false;
         let mut cursor_row = 0;
 
-        for (start, grapheme) in self.value.grapheme_indices(true) {
-            let under_cursor = self.cursor == start;
-            if grapheme == "\n" {
-                if under_cursor {
-                    row.push_unit(
-                        CursorUnit::space(self.cursor_style),
-                        content_width,
-                        &mut rows,
+        for (index, source_row) in source_rows.iter().enumerate() {
+            let mut row = ContentRow::default();
+            let cursor_rendered_before_row = cursor_rendered;
+            for (fragment_index, fragment) in source_row.fragments.iter().enumerate() {
+                push_rendered_range(
+                    &mut row,
+                    &self.value,
+                    fragment.word_range,
+                    self.cursor,
+                    self.cursor_style,
+                    Style::new(),
+                    &mut cursor_rendered,
+                );
+                if fragment_index + 1 < source_row.fragments.len() {
+                    push_rendered_range(
+                        &mut row,
+                        &self.value,
+                        fragment.whitespace_range,
+                        self.cursor,
+                        self.cursor_style,
+                        Style::new(),
+                        &mut cursor_rendered,
                     );
-                    cursor_row = rows.len();
-                    cursor_rendered = true;
+                } else if !fragment.penalty.is_empty() {
+                    row.push_unit_unwrapped(CursorUnit::text(&fragment.penalty, Style::new()));
                 }
-                rows.push(row.finish());
-                row = ContentRow::default();
-            } else if grapheme == "\t" {
-                row.push_tab(under_cursor, self.cursor_style, content_width, &mut rows);
-                if under_cursor {
-                    cursor_row = rows.len();
-                }
-                cursor_rendered |= under_cursor;
-            } else {
+            }
+
+            if !cursor_rendered_before_row && cursor_rendered {
+                cursor_row = rows.len();
+            }
+
+            let next_starts_at_cursor = source_rows
+                .get(index + 1)
+                .is_some_and(|next| next.start == self.cursor);
+            if !cursor_rendered
+                && self.cursor >= source_row.start
+                && self.cursor <= source_row.end
+                && !(self.cursor == source_row.end && next_starts_at_cursor)
+            {
                 row.push_unit(
-                    CursorUnit::text(
-                        grapheme,
-                        if under_cursor {
-                            self.cursor_style
-                        } else {
-                            Style::new()
-                        },
-                    ),
+                    CursorUnit::space(self.cursor_style),
                     content_width,
                     &mut rows,
                 );
-                if under_cursor {
-                    cursor_row = rows.len();
-                }
-                cursor_rendered |= under_cursor;
+                cursor_row = rows.len();
+                cursor_rendered = true;
             }
+
+            rows.push(row.finish());
         }
 
-        if !cursor_rendered {
-            row.push_unit(
-                CursorUnit::space(self.cursor_style),
-                content_width,
-                &mut rows,
-            );
-            cursor_row = rows.len();
-        }
-
-        rows.push(row.finish());
         ContentLayout { rows, cursor_row }
     }
 }
@@ -736,6 +769,108 @@ impl Render for Textarea {
         }
 
         Text::from_lines(self.rendered_lines(width))
+    }
+}
+
+#[derive(Debug)]
+struct WrappedSourceRow {
+    start: usize,
+    end: usize,
+    fragments: Vec<WrappedFragment>,
+}
+
+fn wrapped_source_rows(value: &str, content_width: usize) -> Vec<WrappedSourceRow> {
+    let mut rows = Vec::new();
+    let mut line_start = 0;
+
+    for (index, ch) in value.char_indices() {
+        if ch == '\n' {
+            push_wrapped_source_line(value, line_start, index, content_width, &mut rows);
+            line_start = index + ch.len_utf8();
+        }
+    }
+    push_wrapped_source_line(value, line_start, value.len(), content_width, &mut rows);
+
+    rows
+}
+
+fn push_wrapped_source_line(
+    value: &str,
+    start: usize,
+    end: usize,
+    content_width: usize,
+    rows: &mut Vec<WrappedSourceRow>,
+) {
+    let line = &value[start..end];
+    if line.is_empty() {
+        rows.push(WrappedSourceRow {
+            start,
+            end,
+            fragments: Vec::new(),
+        });
+        return;
+    }
+
+    let wrapped_lines = wrap::offset_wrapped_lines(
+        wrap::wrap_source_by(line, content_width, textarea_display_width),
+        start,
+    );
+
+    if wrapped_lines.is_empty() {
+        rows.push(WrappedSourceRow {
+            start,
+            end,
+            fragments: Vec::new(),
+        });
+        return;
+    }
+
+    for fragments in wrapped_lines {
+        let row_start = fragments
+            .first()
+            .map(|fragment| fragment.word_range.start)
+            .unwrap_or(start);
+        let row_end = fragments
+            .last()
+            .map(|fragment| fragment.whitespace_range.end)
+            .unwrap_or(end);
+        rows.push(WrappedSourceRow {
+            start: row_start,
+            end: row_end,
+            fragments,
+        });
+    }
+}
+
+fn push_rendered_range(
+    row: &mut ContentRow,
+    source: &str,
+    range: SourceRange,
+    cursor: usize,
+    cursor_style: Style,
+    style: Style,
+    cursor_rendered: &mut bool,
+) {
+    for (offset, grapheme) in range.text(source).grapheme_indices(true) {
+        let start = range.start + offset;
+        let under_cursor = cursor == start;
+        if grapheme == "\t" {
+            row.push_tab_unwrapped(under_cursor, cursor_style);
+        } else {
+            row.push_unit_unwrapped(CursorUnit::text(
+                grapheme,
+                if under_cursor { cursor_style } else { style },
+            ));
+        }
+        *cursor_rendered |= under_cursor;
+    }
+}
+
+fn textarea_display_width(content: &str) -> usize {
+    if content == "\t" {
+        4
+    } else {
+        UnicodeWidthStr::width(content)
     }
 }
 
@@ -828,21 +963,18 @@ impl ContentRow {
         self.width += unit.width;
     }
 
-    fn push_tab(
-        &mut self,
-        under_cursor: bool,
-        cursor_style: Style,
-        content_width: usize,
-        rows: &mut Vec<Vec<Span>>,
-    ) {
+    fn push_unit_unwrapped(&mut self, unit: CursorUnit) {
+        for piece in unit.pieces {
+            self.push_text(&piece.content, piece.style);
+        }
+        self.width += unit.width;
+    }
+
+    fn push_tab_unwrapped(&mut self, under_cursor: bool, cursor_style: Style) {
         if under_cursor {
-            self.push_unit(
-                CursorUnit::tab_under_cursor(cursor_style),
-                content_width,
-                rows,
-            );
+            self.push_unit_unwrapped(CursorUnit::tab_under_cursor(cursor_style));
         } else {
-            self.push_unit(CursorUnit::text("    ", Style::new()), content_width, rows);
+            self.push_unit_unwrapped(CursorUnit::text("    ", Style::new()));
         }
     }
 
@@ -930,34 +1062,30 @@ fn text_insertion_modifiers(modifiers: KeyModifiers) -> bool {
 }
 
 fn visual_rows(value: &str, content_width: usize) -> Vec<VisualRow> {
-    let mut rows = Vec::new();
-    let mut row = VisualRow::new(0);
+    wrapped_source_rows(value, content_width)
+        .into_iter()
+        .map(|source_row| {
+            let mut row = VisualRow::new(source_row.start);
+            for (fragment_index, fragment) in source_row.fragments.iter().enumerate() {
+                push_visual_range(&mut row, value, fragment.word_range);
+                if fragment_index + 1 < source_row.fragments.len() {
+                    push_visual_range(&mut row, value, fragment.whitespace_range);
+                } else {
+                    row.width += UnicodeWidthStr::width(fragment.penalty.as_str());
+                }
+            }
+            row.end = source_row.end;
+            row
+        })
+        .collect()
+}
 
-    for (start, grapheme) in value.grapheme_indices(true) {
+fn push_visual_range(row: &mut VisualRow, source: &str, range: SourceRange) {
+    for (offset, grapheme) in range.text(source).grapheme_indices(true) {
+        let start = range.start + offset;
         let end = start + grapheme.len();
-        if grapheme == "\n" {
-            row.end = start;
-            rows.push(row);
-            row = VisualRow::new(end);
-            continue;
-        }
-
-        let width = if grapheme == "\t" {
-            4
-        } else {
-            UnicodeWidthStr::width(grapheme)
-        };
-        if row.width > 0 && row.width + width > content_width {
-            row.end = start;
-            rows.push(row);
-            row = VisualRow::new(start);
-        }
-        row.push(start, end, width);
+        row.push(start, end, textarea_display_width(grapheme));
     }
-
-    row.end = value.len();
-    rows.push(row);
-    rows
 }
 
 fn visual_cursor_row(rows: &[VisualRow], cursor: usize) -> usize {

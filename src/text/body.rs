@@ -1,19 +1,13 @@
 use std::borrow::Cow;
 
-use textwrap::{
-    Options,
-    core::{Fragment, Word},
-    word_splitters::split_words,
-    wrap_algorithms::{Penalties, wrap_optimal_fit},
-};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 use crate::Render;
 
 use super::{
     Line, Span, Style, TextError,
     ansi::{self, ParseMode},
+    wrap::{self, SourceRange, WrappedFragment},
 };
 
 /// Multi-line styled text rendered by terminal blocks.
@@ -136,86 +130,6 @@ impl Render for Text {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SourceRange {
-    start: usize,
-    end: usize,
-}
-
-impl SourceRange {
-    fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
-    }
-
-    fn is_empty(self) -> bool {
-        self.start == self.end
-    }
-
-    fn text(self, source: &str) -> &str {
-        &source[self.start..self.end]
-    }
-
-    fn display_width(self, source: &str) -> usize {
-        UnicodeWidthStr::width(self.text(source))
-    }
-
-    fn contains(self, other: SourceRange) -> bool {
-        other.start >= self.start && other.end <= self.end
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct StyledFragment {
-    word_range: SourceRange,
-    whitespace_range: SourceRange,
-    penalty: String,
-    width: usize,
-    whitespace_width: usize,
-    penalty_width: usize,
-}
-
-impl StyledFragment {
-    fn hard_wrap_piece(source: &str, word_range: SourceRange) -> Self {
-        Self {
-            word_range,
-            whitespace_range: SourceRange::new(word_range.end, word_range.end),
-            penalty: String::new(),
-            width: word_range.display_width(source),
-            whitespace_width: 0,
-            penalty_width: 0,
-        }
-    }
-
-    fn hard_wrap_tail(source: &str, word_range: SourceRange, original: &StyledFragment) -> Self {
-        Self {
-            word_range,
-            whitespace_range: original.whitespace_range,
-            penalty: original.penalty.clone(),
-            width: word_range.display_width(source),
-            whitespace_width: original.whitespace_width,
-            penalty_width: original.penalty_width,
-        }
-    }
-
-    fn needs_hard_wrap(&self, width: usize) -> bool {
-        self.width > width && !self.word_range.is_empty()
-    }
-}
-
-impl Fragment for StyledFragment {
-    fn width(&self) -> f64 {
-        self.width as f64
-    }
-
-    fn whitespace_width(&self) -> f64 {
-        self.whitespace_width as f64
-    }
-
-    fn penalty_width(&self) -> f64 {
-        self.penalty_width as f64
-    }
-}
-
 #[derive(Debug)]
 struct StyledGrapheme<'a> {
     range: SourceRange,
@@ -281,109 +195,14 @@ fn wrap_line(line: &Line, width: usize) -> Vec<Line> {
 
     let source = line.plain_content();
     let styled_graphemes = styled_graphemes(line);
-    let fragments = styled_fragments(&source, width);
-    let wrapped_fragments = wrap_fragments(&fragments, width);
-
-    wrapped_fragments
+    wrap::wrap_source(&source, width)
         .into_iter()
-        .map(|line_fragments| line_from_fragments(line_fragments, &styled_graphemes))
+        .map(|line_fragments| line_from_fragments(&line_fragments, &styled_graphemes))
         .collect()
 }
 
-fn styled_fragments(source: &str, width: usize) -> Vec<StyledFragment> {
-    let options = Options::new(width).break_words(false);
-    let words = split_words(
-        options.word_separator.find_words(source),
-        &options.word_splitter,
-    );
-    let mut fragments = Vec::new();
-    let mut search_start = 0;
-
-    for word in words {
-        let (fragment, next_search_start) = styled_fragment_from_word(source, search_start, word);
-        search_start = next_search_start;
-        fragments.extend(split_fragment_at_grapheme_boundaries(
-            source, fragment, width,
-        ));
-    }
-
-    fragments
-}
-
-fn styled_fragment_from_word(
-    source: &str,
-    search_start: usize,
-    word: Word<'_>,
-) -> (StyledFragment, usize) {
-    let word_start = source[search_start..]
-        .find(word.word)
-        .map(|offset| search_start + offset)
-        .unwrap_or(search_start);
-    let word_range = SourceRange::new(word_start, word_start + word.word.len());
-    let whitespace_range = SourceRange::new(word_range.end, word_range.end + word.whitespace.len());
-
-    (
-        StyledFragment {
-            word_range,
-            whitespace_range,
-            penalty: word.penalty.to_owned(),
-            width: word_range.display_width(source),
-            whitespace_width: whitespace_range.display_width(source),
-            penalty_width: UnicodeWidthStr::width(word.penalty),
-        },
-        whitespace_range.end,
-    )
-}
-
-fn split_fragment_at_grapheme_boundaries(
-    source: &str,
-    fragment: StyledFragment,
-    width: usize,
-) -> Vec<StyledFragment> {
-    if !fragment.needs_hard_wrap(width) {
-        return vec![fragment];
-    }
-
-    let mut fragments = Vec::new();
-    let word_range = fragment.word_range;
-    let mut chunk_start = word_range.start;
-    let mut chunk_width = 0;
-
-    for (offset, grapheme) in word_range.text(source).grapheme_indices(true) {
-        let grapheme_start = word_range.start + offset;
-        let grapheme_end = grapheme_start + grapheme.len();
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
-
-        if chunk_width > 0 && grapheme_width > 0 && chunk_width + grapheme_width > width {
-            fragments.push(StyledFragment::hard_wrap_piece(
-                source,
-                SourceRange::new(chunk_start, grapheme_start),
-            ));
-            chunk_start = grapheme_start;
-            chunk_width = 0;
-        }
-
-        chunk_width += grapheme_width;
-        if grapheme_end == word_range.end {
-            fragments.push(StyledFragment::hard_wrap_tail(
-                source,
-                SourceRange::new(chunk_start, word_range.end),
-                &fragment,
-            ));
-        }
-    }
-
-    fragments
-}
-
-fn wrap_fragments(fragments: &[StyledFragment], width: usize) -> Vec<&[StyledFragment]> {
-    let line_widths = [width as f64];
-    wrap_optimal_fit(fragments, &line_widths, &Penalties::new())
-        .expect("styled text widths fit in f64 wrapping bounds")
-}
-
 fn line_from_fragments(
-    fragments: &[StyledFragment],
+    fragments: &[WrappedFragment],
     styled_graphemes: &[StyledGrapheme<'_>],
 ) -> Line {
     let Some((last, leading)) = fragments.split_last() else {
@@ -408,7 +227,7 @@ fn line_from_fragments(
 }
 
 fn trailing_fragment_style(
-    fragment: &StyledFragment,
+    fragment: &WrappedFragment,
     styled_graphemes: &[StyledGrapheme<'_>],
 ) -> Style {
     styled_graphemes
