@@ -165,6 +165,20 @@ impl Textarea {
         self
     }
 
+    /// Moves the cursor to the start of the previous word.
+    pub fn move_word_left(&mut self) -> &mut Self {
+        self.cursor = previous_word_start(&self.value, self.cursor);
+        self.reset_preferred_visual_column();
+        self
+    }
+
+    /// Moves the cursor to the end of the next word.
+    pub fn move_word_right(&mut self) -> &mut Self {
+        self.cursor = next_word_end(&self.value, self.cursor);
+        self.reset_preferred_visual_column();
+        self
+    }
+
     /// Moves the cursor to the start of the current source line.
     pub fn move_to_line_start(&mut self) -> &mut Self {
         self.cursor = self.value[..self.cursor]
@@ -809,6 +823,23 @@ fn next_grapheme_boundary(value: &str, byte_index: usize) -> usize {
         .grapheme_indices(true)
         .map(|(index, grapheme)| index + grapheme.len())
         .find(|index| *index > byte_index)
+        .unwrap_or(value.len())
+}
+
+fn previous_word_start(value: &str, cursor: usize) -> usize {
+    value
+        .unicode_word_indices()
+        .map(|(start, _)| start)
+        .take_while(|start| *start < cursor)
+        .last()
+        .unwrap_or(0)
+}
+
+fn next_word_end(value: &str, cursor: usize) -> usize {
+    value
+        .unicode_word_indices()
+        .map(|(start, word)| start + word.len())
+        .find(|end| *end > cursor)
         .unwrap_or(value.len())
 }
 

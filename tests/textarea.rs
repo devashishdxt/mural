@@ -139,6 +139,108 @@ fn textarea_edits_by_unicode_graphemes() {
 }
 
 #[test]
+fn textarea_moves_word_left_to_start_of_current_word() {
+    let mut input = Textarea::new();
+    input.set_value("hello").set_cursor(2);
+
+    input.move_word_left();
+
+    assert_eq!(input.cursor(), 0);
+}
+
+#[test]
+fn textarea_moves_word_right_to_end_of_current_word() {
+    let mut input = Textarea::new();
+    input.set_value("hello").set_cursor(2);
+
+    input.move_word_right();
+
+    assert_eq!(input.cursor(), 5);
+}
+
+#[test]
+fn textarea_moves_word_left_skips_punctuation_and_whitespace() {
+    let mut input = Textarea::new();
+    input.set_value("hello,   world");
+
+    input.move_word_left();
+
+    assert_eq!(input.cursor(), 9);
+    input.move_word_left();
+    assert_eq!(input.cursor(), 0);
+}
+
+#[test]
+fn textarea_moves_word_right_skips_punctuation_and_whitespace() {
+    let mut input = Textarea::new();
+    input.set_value("hello,   world").set_cursor(5);
+
+    input.move_word_right();
+
+    assert_eq!(input.cursor(), input.value().len());
+}
+
+#[test]
+fn textarea_moves_words_across_source_lines() {
+    let mut input = Textarea::new();
+    input.set_value("hello\nworld").set_cursor(6);
+
+    input.move_word_left();
+    assert_eq!(input.cursor(), 0);
+
+    input.set_cursor(5).move_word_right();
+    assert_eq!(input.cursor(), input.value().len());
+}
+
+#[test]
+fn textarea_moves_by_unicode_words() {
+    let mut input = Textarea::new();
+    input.set_value("can't jump 29.3 café");
+
+    input.move_word_left();
+    assert_eq!(input.cursor(), 16);
+    input.move_word_left();
+    assert_eq!(input.cursor(), 11);
+    input.move_word_left();
+    assert_eq!(input.cursor(), 6);
+    input.move_word_left();
+    assert_eq!(input.cursor(), 0);
+
+    input.move_word_right();
+    assert_eq!(input.cursor(), 5);
+    input.move_word_right();
+    assert_eq!(input.cursor(), 10);
+    input.move_word_right();
+    assert_eq!(input.cursor(), 15);
+    input.move_word_right();
+    assert_eq!(input.cursor(), input.value().len());
+}
+
+#[test]
+fn textarea_word_movement_falls_back_to_buffer_edges_without_words() {
+    let mut input = Textarea::new();
+    input.set_value("!!!   ");
+
+    input.move_word_left();
+    assert_eq!(input.cursor(), 0);
+
+    input.move_word_right();
+    assert_eq!(input.cursor(), input.value().len());
+}
+
+#[test]
+fn textarea_word_movement_resets_preferred_visual_column() {
+    let mut input = Textarea::new();
+    input.set_value("abcde\nfghij").set_cursor(4);
+
+    input.move_visual_down(5);
+    input.move_word_right();
+    input.move_visual_up(5);
+
+    assert_eq!(input.cursor(), 8);
+}
+
+#[test]
 fn textarea_renders_tab_as_four_spaces_and_cursor_styles_only_first_tab_cell() {
     let mut input = Textarea::new();
     input.set_value("a\tb").set_cursor(1);
