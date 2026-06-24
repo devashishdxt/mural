@@ -16,6 +16,12 @@ const DEFAULT_PROMPT: &str = "›";
 const DEFAULT_GAP: usize = 1;
 const DEFAULT_MAX_HEIGHT: usize = 6;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CursorAffinity {
+    Default,
+    PreviousVisualRow { cursor: usize },
+}
+
 /// Creates a default textarea block.
 pub fn textarea() -> Textarea {
     Textarea::new()
@@ -38,6 +44,7 @@ pub struct Textarea {
     scroll_width: Cell<Option<usize>>,
     last_rendered_width: Cell<Option<usize>>,
     preferred_visual_column: Cell<Option<usize>>,
+    cursor_affinity: CursorAffinity,
 }
 
 impl Textarea {
@@ -58,6 +65,7 @@ impl Textarea {
             scroll_width: Cell::new(None),
             last_rendered_width: Cell::new(None),
             preferred_visual_column: Cell::new(None),
+            cursor_affinity: CursorAffinity::Default,
         }
     }
 
@@ -70,6 +78,7 @@ impl Textarea {
     pub fn set_value(&mut self, value: impl AsRef<str>) -> &mut Self {
         self.value = sanitize_input(value.as_ref());
         self.cursor = self.value.len();
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_scroll();
         self.reset_preferred_visual_column();
         self
@@ -79,6 +88,7 @@ impl Textarea {
     pub fn clear(&mut self) -> &mut Self {
         self.value.clear();
         self.cursor = 0;
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_scroll();
         self.reset_preferred_visual_column();
         self
@@ -104,6 +114,7 @@ impl Textarea {
     /// Moves the cursor to `byte_index`, clamped backward to a grapheme boundary.
     pub fn set_cursor(&mut self, byte_index: usize) -> &mut Self {
         self.cursor = previous_grapheme_boundary(&self.value, byte_index.min(self.value.len()));
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
@@ -113,6 +124,7 @@ impl Textarea {
         let value = sanitize_input(value.as_ref());
         self.value.insert_str(self.cursor, &value);
         self.cursor += value.len();
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
@@ -137,6 +149,7 @@ impl Textarea {
         let previous = previous_grapheme_boundary(&self.value, self.cursor.saturating_sub(1));
         self.value.replace_range(previous..self.cursor, "");
         self.cursor = previous;
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
@@ -149,6 +162,7 @@ impl Textarea {
 
         let next = next_grapheme_boundary(&self.value, self.cursor);
         self.value.replace_range(self.cursor..next, "");
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
@@ -158,6 +172,7 @@ impl Textarea {
         if self.cursor > 0 {
             self.cursor = previous_grapheme_boundary(&self.value, self.cursor.saturating_sub(1));
         }
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
@@ -167,6 +182,7 @@ impl Textarea {
         if self.cursor < self.value.len() {
             self.cursor = next_grapheme_boundary(&self.value, self.cursor);
         }
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
@@ -174,6 +190,7 @@ impl Textarea {
     /// Moves the cursor to the start of the previous word.
     pub fn move_word_left(&mut self) -> &mut Self {
         self.cursor = previous_word_start(&self.value, self.cursor);
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
@@ -181,6 +198,7 @@ impl Textarea {
     /// Moves the cursor to the end of the next word.
     pub fn move_word_right(&mut self) -> &mut Self {
         self.cursor = next_word_end(&self.value, self.cursor);
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
@@ -191,16 +209,23 @@ impl Textarea {
             .rfind('\n')
             .map(|index| index + 1)
             .unwrap_or(0);
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
 
-    /// Moves the cursor to the end of the current source line.
+    /// Moves the cursor to the end of the current source line using the last rendered width.
     pub fn move_to_line_end(&mut self) -> &mut Self {
+        self.move_to_line_end_with_width(self.navigation_width())
+    }
+
+    /// Moves the cursor to the end of the current source line for the given textarea render width.
+    pub fn move_to_line_end_with_width(&mut self, width: u16) -> &mut Self {
         self.cursor = self.value[self.cursor..]
             .find('\n')
             .map(|offset| self.cursor + offset)
             .unwrap_or(self.value.len());
+        self.set_full_visual_row_end_affinity(width);
         self.reset_preferred_visual_column();
         self
     }
@@ -208,13 +233,20 @@ impl Textarea {
     /// Moves the cursor to the start of the buffer.
     pub fn move_to_buffer_start(&mut self) -> &mut Self {
         self.cursor = 0;
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
 
-    /// Moves the cursor to the end of the buffer.
+    /// Moves the cursor to the end of the buffer using the last rendered width.
     pub fn move_to_buffer_end(&mut self) -> &mut Self {
+        self.move_to_buffer_end_with_width(self.navigation_width())
+    }
+
+    /// Moves the cursor to the end of the buffer for the given textarea render width.
+    pub fn move_to_buffer_end_with_width(&mut self, width: u16) -> &mut Self {
         self.cursor = self.value.len();
+        self.set_full_visual_row_end_affinity(width);
         self.reset_preferred_visual_column();
         self
     }
@@ -337,8 +369,9 @@ impl Textarea {
     /// Moves the cursor to the start of the current visual row for the given textarea render width.
     pub fn move_to_visual_row_start_with_width(&mut self, width: u16) -> &mut Self {
         let rows = self.visual_rows_for_width(width);
-        let index = visual_cursor_row(&rows, self.cursor);
+        let index = self.visual_cursor_row_for_navigation(&rows);
         self.cursor = rows.get(index).map(|row| row.start).unwrap_or(0);
+        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
@@ -351,11 +384,12 @@ impl Textarea {
     /// Moves the cursor to the end of the current visual row for the given textarea render width.
     pub fn move_to_visual_row_end_with_width(&mut self, width: u16) -> &mut Self {
         let rows = self.visual_rows_for_width(width);
-        let index = visual_cursor_row(&rows, self.cursor);
+        let index = self.visual_cursor_row_for_navigation(&rows);
         self.cursor = rows
             .get(index)
             .map(|row| row.end)
             .unwrap_or(self.value.len());
+        self.set_full_visual_row_end_affinity_for_rows(&rows, index, width);
         self.reset_preferred_visual_column();
         self
     }
@@ -404,7 +438,7 @@ impl Textarea {
             }
             KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.changed_by(|textarea| {
-                    textarea.move_to_line_end();
+                    textarea.move_to_line_end_with_width(width);
                 })
             }
             KeyCode::Char(ch) if text_insertion_modifiers(modifiers) => {
@@ -452,7 +486,7 @@ impl Textarea {
             }
             KeyCode::End if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.changed_by(|textarea| {
-                    textarea.move_to_buffer_end();
+                    textarea.move_to_buffer_end_with_width(width);
                 })
             }
             KeyCode::Home => self.changed_by(|textarea| {
@@ -479,7 +513,7 @@ impl Textarea {
             return self;
         }
 
-        let current_row = visual_cursor_row(&rows, self.cursor);
+        let current_row = self.visual_cursor_row_for_navigation(&rows);
         let current_column = rows[current_row].column_for_cursor(self.cursor);
         let preferred_column = self.preferred_visual_column.get().unwrap_or(current_column);
         let target_row = current_row
@@ -487,8 +521,32 @@ impl Textarea {
             .min(rows.len().saturating_sub(1));
 
         self.cursor = rows[target_row].cursor_for_column(preferred_column);
+        if target_row == current_row {
+            self.cursor_affinity = CursorAffinity::Default;
+        } else {
+            self.set_full_visual_row_end_affinity_for_rows(&rows, target_row, width);
+        }
         self.preferred_visual_column.set(Some(preferred_column));
         self
+    }
+
+    fn visual_cursor_row_for_navigation(&self, rows: &[VisualRow]) -> usize {
+        if self.cursor_affinity
+            == (CursorAffinity::PreviousVisualRow {
+                cursor: self.cursor,
+            })
+        {
+            if let Some(index) = rows.iter().enumerate().position(|(index, row)| {
+                row.end == self.cursor
+                    && rows
+                        .get(index + 1)
+                        .is_some_and(|next| next.start == self.cursor)
+            }) {
+                return index;
+            }
+        }
+
+        visual_cursor_row(rows, self.cursor)
     }
 
     fn visual_rows_for_width(&self, width: u16) -> Vec<VisualRow> {
@@ -497,11 +555,54 @@ impl Textarea {
         visual_rows(&self.value, content_width)
     }
 
+    fn set_full_visual_row_end_affinity(&mut self, width: u16) {
+        let rows = self.visual_rows_for_width(width);
+        let index = visual_cursor_row(&rows, self.cursor);
+        self.set_full_visual_row_end_affinity_for_rows(&rows, index, width);
+    }
+
+    fn set_full_visual_row_end_affinity_for_rows(
+        &mut self,
+        rows: &[VisualRow],
+        index: usize,
+        width: u16,
+    ) {
+        self.cursor_affinity = if self.should_prefer_previous_visual_row_end(rows, index, width) {
+            CursorAffinity::PreviousVisualRow {
+                cursor: self.cursor,
+            }
+        } else {
+            CursorAffinity::Default
+        };
+    }
+
+    fn should_prefer_previous_visual_row_end(
+        &self,
+        rows: &[VisualRow],
+        index: usize,
+        width: u16,
+    ) -> bool {
+        let width = usize::from(width);
+        let content_width = width.saturating_sub(self.prefix_width()).max(1);
+        rows.get(index).is_some_and(|row| {
+            row.end == self.cursor
+                && !row.cells.is_empty()
+                && (row.width >= content_width
+                    || rows
+                        .get(index + 1)
+                        .is_some_and(|next| next.start == self.cursor))
+        })
+    }
+
     fn changed_by(&mut self, action: impl FnOnce(&mut Self)) -> KeyOutcome {
         let before_value = self.value.clone();
         let before_cursor = self.cursor;
+        let before_cursor_affinity = self.cursor_affinity;
         action(self);
-        if self.value == before_value && self.cursor == before_cursor {
+        if self.value == before_value
+            && self.cursor == before_cursor
+            && self.cursor_affinity == before_cursor_affinity
+        {
             KeyOutcome::Unchanged
         } else {
             KeyOutcome::Changed
@@ -645,6 +746,7 @@ impl Textarea {
                             usize::MAX,
                             self.cursor_style,
                             self.placeholder_style,
+                            None,
                             &mut placeholder_cursor_rendered,
                         );
                         if fragment_index + 1 < placeholder_row.fragments.len() {
@@ -655,6 +757,7 @@ impl Textarea {
                                 usize::MAX,
                                 self.cursor_style,
                                 self.placeholder_style,
+                                None,
                                 &mut placeholder_cursor_rendered,
                             );
                         } else if !fragment.penalty.is_empty() {
@@ -680,6 +783,18 @@ impl Textarea {
         for (index, source_row) in source_rows.iter().enumerate() {
             let mut row = ContentRow::default();
             let cursor_rendered_before_row = cursor_rendered;
+            let prefers_previous_row = self.cursor_affinity
+                == (CursorAffinity::PreviousVisualRow {
+                    cursor: self.cursor,
+                })
+                && source_row.end == self.cursor;
+            let cursor_overlay_grapheme_end = if prefers_previous_row
+                && rendered_source_row_width(&self.value, source_row) >= content_width
+            {
+                last_rendered_grapheme_end(&self.value, source_row)
+            } else {
+                None
+            };
             for (fragment_index, fragment) in source_row.fragments.iter().enumerate() {
                 push_rendered_range(
                     &mut row,
@@ -688,6 +803,7 @@ impl Textarea {
                     self.cursor,
                     self.cursor_style,
                     Style::new(),
+                    cursor_overlay_grapheme_end,
                     &mut cursor_rendered,
                 );
                 if fragment_index + 1 < source_row.fragments.len() {
@@ -698,6 +814,7 @@ impl Textarea {
                         self.cursor,
                         self.cursor_style,
                         Style::new(),
+                        cursor_overlay_grapheme_end,
                         &mut cursor_rendered,
                     );
                 } else if !fragment.penalty.is_empty() {
@@ -715,7 +832,9 @@ impl Textarea {
             if !cursor_rendered
                 && self.cursor >= source_row.start
                 && self.cursor <= source_row.end
-                && !(self.cursor == source_row.end && next_starts_at_cursor)
+                && !(self.cursor == source_row.end
+                    && next_starts_at_cursor
+                    && !prefers_previous_row)
             {
                 row.push_unit(
                     CursorUnit::space(self.cursor_style),
@@ -749,6 +868,7 @@ impl PartialEq for Textarea {
             && self.scroll_width.get() == other.scroll_width.get()
             && self.last_rendered_width.get() == other.last_rendered_width.get()
             && self.preferred_visual_column.get() == other.preferred_visual_column.get()
+            && self.cursor_affinity == other.cursor_affinity
     }
 }
 
@@ -842,6 +962,34 @@ fn push_wrapped_source_line(
     }
 }
 
+fn last_rendered_grapheme_end(source: &str, row: &WrappedSourceRow) -> Option<usize> {
+    rendered_ranges(row)
+        .flat_map(|range| {
+            range
+                .text(source)
+                .grapheme_indices(true)
+                .map(move |(offset, grapheme)| range.start + offset + grapheme.len())
+        })
+        .last()
+}
+
+fn rendered_source_row_width(source: &str, row: &WrappedSourceRow) -> usize {
+    rendered_ranges(row)
+        .map(|range| range.display_width_by(source, textarea_display_width))
+        .sum()
+}
+
+fn rendered_ranges(row: &WrappedSourceRow) -> impl Iterator<Item = SourceRange> + '_ {
+    row.fragments
+        .iter()
+        .enumerate()
+        .flat_map(|(index, fragment)| {
+            let include_whitespace = index + 1 < row.fragments.len();
+            std::iter::once(fragment.word_range)
+                .chain(include_whitespace.then_some(fragment.whitespace_range))
+        })
+}
+
 fn push_rendered_range(
     row: &mut ContentRow,
     source: &str,
@@ -849,12 +997,17 @@ fn push_rendered_range(
     cursor: usize,
     cursor_style: Style,
     style: Style,
+    cursor_overlay_grapheme_end: Option<usize>,
     cursor_rendered: &mut bool,
 ) {
     for (offset, grapheme) in range.text(source).grapheme_indices(true) {
         let start = range.start + offset;
-        let under_cursor = cursor == start;
-        if grapheme == "\t" {
+        let end = start + grapheme.len();
+        let cursor_at_grapheme_end = cursor_overlay_grapheme_end == Some(end);
+        let under_cursor = !*cursor_rendered && (cursor == start || cursor_at_grapheme_end);
+        if grapheme == "\t" && under_cursor && cursor_at_grapheme_end {
+            row.push_unit_unwrapped(CursorUnit::text("    ", cursor_style));
+        } else if grapheme == "\t" {
             row.push_tab_unwrapped(under_cursor, cursor_style);
         } else {
             row.push_unit_unwrapped(CursorUnit::text(
