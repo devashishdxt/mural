@@ -123,16 +123,15 @@ impl AnswerStatus {
         }
     }
 
-    fn show(&mut self, content: &str) -> Result<&mut Self, mural::TextError> {
+    fn show(&mut self, content: &str) -> Result<(), mural::TextError> {
         *self.spinner.content_mut() = Text::from_plain(content)?;
         self.spinner.reset();
         self.visible = true;
-        Ok(self)
+        Ok(())
     }
 
-    fn hide(&mut self) -> &mut Self {
+    fn hide(&mut self) {
         self.visible = false;
-        self
     }
 }
 

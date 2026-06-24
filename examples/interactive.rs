@@ -29,10 +29,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // It uses crossterm for raw-mode keyboard events while Mural owns only the
     // normal-buffer rendering surface.
     let mut session = InteractiveSession::start()?;
-    let mut size = current_size()?;
 
     setup_ui(session.terminal_mut())?;
-    run_event_loop(&mut session, &mut size)?;
+    run_event_loop(&mut session)?;
     session.finish()?;
 
     println!("finished: submitted messages remain above.");
@@ -42,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn setup_ui(
     terminal: &mut Terminal<StdoutBackend<io::Stdout>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    terminal.insert_pinned(ID_PREVIEW, Preview::new())?;
+    terminal.insert_pinned(ID_PREVIEW, Preview::default())?;
     terminal.push_pinned(separator())?;
     terminal.insert_pinned(
         ID_INPUT,
@@ -57,10 +56,7 @@ fn setup_ui(
     Ok(())
 }
 
-fn run_event_loop(
-    session: &mut InteractiveSession,
-    size: &mut Size,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn run_event_loop(session: &mut InteractiveSession) -> Result<(), Box<dyn std::error::Error>> {
     let mut dirty = false;
     let mut last_render = Instant::now();
 
@@ -89,8 +85,7 @@ fn run_event_loop(
                 dirty |= handle_input_key(session.terminal_mut(), key)?;
             }
             Event::Resize(width, height) => {
-                *size = Size::new(width, height);
-                session.terminal_mut().resize(*size)?;
+                session.terminal_mut().resize(Size::new(width, height))?;
                 dirty = true;
             }
             Event::Paste(text) => {
@@ -157,9 +152,7 @@ fn update_preview(
         .pinned_block_mut::<Textarea>(ID_INPUT)?
         .value()
         .to_owned();
-    terminal
-        .pinned_block_mut::<Preview>(ID_PREVIEW)?
-        .set_value(value);
+    terminal.pinned_block_mut::<Preview>(ID_PREVIEW)?.value = value;
     Ok(())
 }
 
@@ -174,7 +167,7 @@ fn should_quit(key: CrosstermKeyEvent) -> bool {
 
 fn submitted_message(content: &str) -> Result<Padding<ListItem<Text>>, TextError> {
     Ok(Padding::new(
-        ListItem::new(input_text(content, Style::new())?)
+        ListItem::new(Text::from_raw_lossy(content)?)
             .bullet("›")?
             .bullet_style(Style::new().fg(Color::BrightCyan).bold())
             .gap(1),
@@ -200,41 +193,9 @@ fn styled_text(content: &str, style: Style) -> Result<Text, TextError> {
     )?])]))
 }
 
-fn input_text(content: &str, style: Style) -> Result<Text, TextError> {
-    content
-        .split('\n')
-        .map(|line| {
-            let line = line.replace('\t', "    ");
-            if line.is_empty() {
-                Ok(Line::from_spans(Vec::new()))
-            } else {
-                Ok(Line::from_spans(vec![Span::new(line, style)?]))
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Text::from_lines)
-}
-
-fn current_size() -> io::Result<Size> {
-    let (width, height) = crossterm_terminal::size()?;
-    Ok(Size::new(width, height))
-}
-
+#[derive(Default)]
 struct Preview {
     value: String,
-}
-
-impl Preview {
-    fn new() -> Self {
-        Self {
-            value: String::new(),
-        }
-    }
-
-    fn set_value(&mut self, value: String) -> &mut Self {
-        self.value = value;
-        self
-    }
 }
 
 impl Render for Preview {
@@ -244,7 +205,7 @@ impl Render for Preview {
         }
 
         ListItem::new(
-            input_text(&self.value, Style::new()).expect("textarea content is sanitized text"),
+            Text::from_raw_lossy(&self.value).expect("textarea content is sanitized text"),
         )
         .bullet("~")
         .expect("preview bullet is static valid text")
