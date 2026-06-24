@@ -169,20 +169,46 @@ impl Textarea {
 
     /// Moves the cursor left by one grapheme.
     pub fn move_left(&mut self) -> &mut Self {
-        if self.cursor > 0 {
-            self.cursor = previous_grapheme_boundary(&self.value, self.cursor.saturating_sub(1));
+        self.move_left_with_width(self.navigation_width())
+    }
+
+    fn move_left_with_width(&mut self, width: u16) -> &mut Self {
+        if self.cursor_affinity == CursorAffinity::Default
+            && self.is_cursor_at_soft_wrap_boundary(width)
+        {
+            self.cursor_affinity = CursorAffinity::PreviousVisualRow {
+                cursor: self.cursor,
+            };
+        } else {
+            if self.cursor > 0 {
+                self.cursor =
+                    previous_grapheme_boundary(&self.value, self.cursor.saturating_sub(1));
+            }
+            self.cursor_affinity = CursorAffinity::Default;
         }
-        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
 
     /// Moves the cursor right by one grapheme.
     pub fn move_right(&mut self) -> &mut Self {
-        if self.cursor < self.value.len() {
-            self.cursor = next_grapheme_boundary(&self.value, self.cursor);
+        self.move_right_with_width(self.navigation_width())
+    }
+
+    fn move_right_with_width(&mut self, width: u16) -> &mut Self {
+        if self.cursor_affinity
+            == (CursorAffinity::PreviousVisualRow {
+                cursor: self.cursor,
+            })
+            && self.is_cursor_at_soft_wrap_boundary(width)
+        {
+            self.cursor_affinity = CursorAffinity::Default;
+        } else {
+            if self.cursor < self.value.len() {
+                self.cursor = next_grapheme_boundary(&self.value, self.cursor);
+            }
+            self.set_previous_visual_row_affinity_at_soft_boundary(width);
         }
-        self.cursor_affinity = CursorAffinity::Default;
         self.reset_preferred_visual_column();
         self
     }
@@ -387,7 +413,7 @@ impl Textarea {
         let index = self.visual_cursor_row_for_navigation(&rows);
         self.cursor = rows
             .get(index)
-            .map(|row| row.end)
+            .map(|row| row.visible_end)
             .unwrap_or(self.value.len());
         self.set_full_visual_row_end_affinity_for_rows(&rows, index, width);
         self.reset_preferred_visual_column();
@@ -468,10 +494,10 @@ impl Textarea {
                 })
             }
             KeyCode::Left => self.changed_by(|textarea| {
-                textarea.move_left();
+                textarea.move_left_with_width(width);
             }),
             KeyCode::Right => self.changed_by(|textarea| {
-                textarea.move_right();
+                textarea.move_right_with_width(width);
             }),
             KeyCode::Up => self.changed_by(|textarea| {
                 textarea.move_visual_up_with_width(width);
@@ -552,13 +578,33 @@ impl Textarea {
     fn visual_rows_for_width(&self, width: u16) -> Vec<VisualRow> {
         let width = usize::from(width);
         let content_width = width.saturating_sub(self.prefix_width()).max(1);
-        visual_rows(&self.value, content_width)
+        visual_rows(&self.value, editable_wrap_width(content_width))
     }
 
     fn set_full_visual_row_end_affinity(&mut self, width: u16) {
         let rows = self.visual_rows_for_width(width);
         let index = visual_cursor_row(&rows, self.cursor);
         self.set_full_visual_row_end_affinity_for_rows(&rows, index, width);
+    }
+
+    fn set_previous_visual_row_affinity_at_soft_boundary(&mut self, width: u16) {
+        self.cursor_affinity = if self.is_cursor_at_soft_wrap_boundary(width) {
+            CursorAffinity::PreviousVisualRow {
+                cursor: self.cursor,
+            }
+        } else {
+            CursorAffinity::Default
+        };
+    }
+
+    fn is_cursor_at_soft_wrap_boundary(&self, width: u16) -> bool {
+        let rows = self.visual_rows_for_width(width);
+        rows.iter().enumerate().any(|(index, row)| {
+            row.cells.last().is_some_and(|cell| cell.end == self.cursor)
+                && rows
+                    .get(index + 1)
+                    .is_some_and(|next| next.start == self.cursor)
+        })
     }
 
     fn set_full_visual_row_end_affinity_for_rows(
@@ -668,6 +714,10 @@ impl Textarea {
         }
 
         let content_width = width - prefix_width;
+        if content_width <= 1 {
+            return vec![self.first_prefix_line(self.gap)];
+        }
+
         let layout = self.content_layout(content_width);
         let start_row = self.visible_start_row(width, layout.rows.len(), layout.cursor_row);
         let max_height = self.max_height.unwrap_or(layout.rows.len());
@@ -776,7 +826,7 @@ impl Textarea {
             };
         }
 
-        let source_rows = wrapped_source_rows(&self.value, content_width);
+        let source_rows = wrapped_source_rows(&self.value, editable_wrap_width(content_width));
         let mut cursor_rendered = false;
         let mut cursor_row = 0;
 
@@ -895,8 +945,13 @@ impl Render for Textarea {
 #[derive(Debug)]
 struct WrappedSourceRow {
     start: usize,
+    visible_end: usize,
     end: usize,
     fragments: Vec<WrappedFragment>,
+}
+
+fn editable_wrap_width(content_width: usize) -> usize {
+    content_width.saturating_sub(1).max(1)
 }
 
 fn wrapped_source_rows(value: &str, content_width: usize) -> Vec<WrappedSourceRow> {
@@ -925,6 +980,7 @@ fn push_wrapped_source_line(
     if line.is_empty() {
         rows.push(WrappedSourceRow {
             start,
+            visible_end: end,
             end,
             fragments: Vec::new(),
         });
@@ -939,6 +995,7 @@ fn push_wrapped_source_line(
     if wrapped_lines.is_empty() {
         rows.push(WrappedSourceRow {
             start,
+            visible_end: end,
             end,
             fragments: Vec::new(),
         });
@@ -954,12 +1011,26 @@ fn push_wrapped_source_line(
             .last()
             .map(|fragment| fragment.whitespace_range.end)
             .unwrap_or(end);
+        let visible_end = visible_end_for_fragments(&fragments).unwrap_or(row_start);
         rows.push(WrappedSourceRow {
             start: row_start,
+            visible_end,
             end: row_end,
             fragments,
         });
     }
+}
+
+fn visible_end_for_fragments(fragments: &[WrappedFragment]) -> Option<usize> {
+    fragments
+        .iter()
+        .enumerate()
+        .flat_map(|(index, fragment)| {
+            let include_whitespace = index + 1 < fragments.len();
+            std::iter::once(fragment.word_range.end)
+                .chain(include_whitespace.then_some(fragment.whitespace_range.end))
+        })
+        .max()
 }
 
 fn last_rendered_grapheme_end(source: &str, row: &WrappedSourceRow) -> Option<usize> {
@@ -1035,6 +1106,7 @@ struct ContentLayout {
 #[derive(Debug)]
 struct VisualRow {
     start: usize,
+    visible_end: usize,
     end: usize,
     width: usize,
     cells: Vec<VisualCell>,
@@ -1044,6 +1116,7 @@ impl VisualRow {
     fn new(start: usize) -> Self {
         Self {
             start,
+            visible_end: start,
             end: start,
             width: 0,
             cells: Vec::new(),
@@ -1084,7 +1157,7 @@ impl VisualRow {
                 };
             }
         }
-        self.end
+        self.visible_end
     }
 }
 
@@ -1227,6 +1300,7 @@ fn visual_rows(value: &str, content_width: usize) -> Vec<VisualRow> {
                     row.width += UnicodeWidthStr::width(fragment.penalty.as_str());
                 }
             }
+            row.visible_end = source_row.visible_end;
             row.end = source_row.end;
             row
         })

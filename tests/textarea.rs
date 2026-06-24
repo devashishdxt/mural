@@ -250,7 +250,7 @@ fn textarea_word_movement_resets_preferred_visual_column() {
     input.move_word_right();
     input.move_visual_up_with_width(5);
 
-    assert_eq!(input.cursor(), 8);
+    assert_eq!(input.cursor(), 9);
 }
 
 #[test]
@@ -277,12 +277,10 @@ fn textarea_renders_multiline_wrapped_content_with_hanging_prompt() {
 
     let rendered = input.render(5);
 
-    assert_eq!(rendered.lines().len(), 5);
-    assert_eq!(rendered.lines()[0].plain_content(), "› abc");
-    assert_eq!(rendered.lines()[1].plain_content(), "  def");
-    assert_eq!(rendered.lines()[2].plain_content(), "  ");
-    assert_eq!(rendered.lines()[3].plain_content(), "  thi");
-    assert_eq!(rendered.lines()[4].plain_content(), "  rd ");
+    assert_eq!(
+        plain_lines(&rendered),
+        vec!["  cd", "  ef", "  ", "  th", "  ir", "  d "]
+    );
     assert!(
         rendered
             .lines()
@@ -305,6 +303,146 @@ fn textarea_wraps_words_like_text_wrapping() {
             .iter()
             .all(|line| line.display_width() <= 12)
     );
+}
+
+#[test]
+fn textarea_right_to_reserved_wrap_boundary_does_not_add_blank_row() {
+    let mut input = Textarea::new();
+    input.set_value("abcd").set_cursor(1);
+
+    assert_eq!(
+        input.handle_key_event_with_width(KeyEvent::new(KeyCode::Right), 5),
+        KeyOutcome::Changed
+    );
+
+    let rendered = input.render(5);
+
+    assert_eq!(input.cursor(), 2);
+    assert_eq!(plain_lines(&rendered), vec!["› ab ", "  cd"]);
+    assert_eq!(
+        rendered.lines()[0].spans().last().unwrap().style(),
+        Style::new().reversed()
+    );
+    assert_eq!(
+        rendered.lines()[1].spans().last().unwrap().style(),
+        Style::new()
+    );
+}
+
+#[test]
+fn textarea_left_from_wrap_boundary_uses_reserved_previous_row_cell() {
+    let mut input = Textarea::new();
+    input.set_value("abcd").set_cursor(2);
+
+    assert_eq!(
+        input.handle_key_event_with_width(KeyEvent::new(KeyCode::Left), 5),
+        KeyOutcome::Changed
+    );
+
+    let rendered = input.render(5);
+
+    assert_eq!(input.cursor(), 2);
+    assert_eq!(plain_lines(&rendered), vec!["› ab ", "  cd"]);
+    assert_eq!(
+        rendered.lines()[0].spans().last().unwrap().style(),
+        Style::new().reversed()
+    );
+    assert_eq!(
+        rendered.lines()[1].spans().last().unwrap().style(),
+        Style::new()
+    );
+}
+
+#[test]
+fn textarea_right_skips_hidden_wrap_whitespace_to_next_row() {
+    let mut input = Textarea::new();
+    input.set_value("hello. how").set_cursor(6);
+
+    assert_eq!(
+        input.handle_key_event_with_width(KeyEvent::new(KeyCode::Right), 10),
+        KeyOutcome::Changed
+    );
+
+    let rendered = input.render(10);
+
+    assert_eq!(input.cursor(), 7);
+    assert_eq!(plain_lines(&rendered), vec!["› hello.", "  how"]);
+    assert_eq!(
+        rendered.lines()[1].spans()[1].style(),
+        Style::new().reversed()
+    );
+}
+
+#[test]
+fn textarea_left_skips_hidden_wrap_whitespace_to_previous_row() {
+    let mut input = Textarea::new();
+    input.set_value("hello. how").set_cursor(7);
+
+    assert_eq!(
+        input.handle_key_event_with_width(KeyEvent::new(KeyCode::Left), 10),
+        KeyOutcome::Changed
+    );
+
+    let rendered = input.render(10);
+
+    assert_eq!(input.cursor(), 6);
+    assert_eq!(plain_lines(&rendered), vec!["› hello. ", "  how"]);
+    assert_eq!(
+        rendered.lines()[0].spans().last().unwrap().style(),
+        Style::new().reversed()
+    );
+}
+
+#[test]
+fn textarea_right_from_reserved_boundary_moves_to_next_row_start() {
+    let mut input = Textarea::new();
+    input.set_value("abcd").set_cursor(1);
+
+    input.handle_key_event_with_width(KeyEvent::new(KeyCode::Right), 5);
+    assert_eq!(
+        input.handle_key_event_with_width(KeyEvent::new(KeyCode::Right), 5),
+        KeyOutcome::Changed
+    );
+
+    let rendered = input.render(5);
+
+    assert_eq!(input.cursor(), 2);
+    assert_eq!(plain_lines(&rendered), vec!["› ab", "  cd"]);
+    assert_eq!(
+        rendered.lines()[1].spans()[1].style(),
+        Style::new().reversed()
+    );
+}
+
+#[test]
+fn textarea_left_from_reserved_boundary_moves_to_previous_grapheme() {
+    let mut input = Textarea::new();
+    input.set_value("abcd").set_cursor(2);
+
+    input.handle_key_event_with_width(KeyEvent::new(KeyCode::Left), 5);
+    assert_eq!(
+        input.handle_key_event_with_width(KeyEvent::new(KeyCode::Left), 5),
+        KeyOutcome::Changed
+    );
+
+    let rendered = input.render(5);
+
+    assert_eq!(input.cursor(), 1);
+    assert_eq!(plain_lines(&rendered), vec!["› ab", "  cd"]);
+    assert_eq!(
+        rendered.lines()[0].spans().last().unwrap().style(),
+        Style::new().reversed()
+    );
+}
+
+#[test]
+fn textarea_one_content_column_renders_only_prefix() {
+    let mut input = Textarea::new();
+    input.set_value("abc");
+
+    let rendered = input.render(3);
+
+    assert_eq!(plain_lines(&rendered), vec!["› "]);
 }
 
 #[test]
@@ -382,7 +520,7 @@ fn textarea_limits_visible_height_with_sticky_cursor_scroll() {
 }
 
 #[test]
-fn textarea_end_on_full_soft_wrapped_row_renders_cursor_on_final_grapheme() {
+fn textarea_end_on_soft_wrapped_row_uses_reserved_cursor_cell() {
     let mut input = Textarea::new();
     input.set_value("abcdef").set_cursor(1);
 
@@ -390,16 +528,16 @@ fn textarea_end_on_full_soft_wrapped_row_renders_cursor_on_final_grapheme() {
         input.handle_key_event_with_width(KeyEvent::new(KeyCode::End), 5),
         KeyOutcome::Changed
     );
-    assert_eq!(input.cursor(), 3);
+    assert_eq!(input.cursor(), 2);
     assert_eq!(
         input.handle_key_event_with_width(KeyEvent::new(KeyCode::End), 5),
         KeyOutcome::Unchanged
     );
-    assert_eq!(input.cursor(), 3);
+    assert_eq!(input.cursor(), 2);
 
     let rendered = input.render(5);
 
-    assert_eq!(plain_lines(&rendered), vec!["› abc", "  def"]);
+    assert_eq!(plain_lines(&rendered), vec!["› ab ", "  cd", "  ef"]);
     assert_eq!(
         rendered.lines()[0].spans().last().unwrap().style(),
         Style::new().reversed()
@@ -411,12 +549,12 @@ fn textarea_end_on_full_soft_wrapped_row_renders_cursor_on_final_grapheme() {
 }
 
 #[test]
-fn textarea_home_after_end_on_full_soft_wrapped_row_returns_to_same_visual_row_start() {
+fn textarea_home_after_end_on_soft_wrapped_row_returns_to_same_visual_row_start() {
     let mut input = Textarea::new();
     input.set_value("abcdef").set_cursor(1);
 
     input.handle_key_event_with_width(KeyEvent::new(KeyCode::End), 5);
-    assert_eq!(input.cursor(), 3);
+    assert_eq!(input.cursor(), 2);
 
     assert_eq!(
         input.handle_key_event_with_width(KeyEvent::new(KeyCode::Home), 5),
@@ -426,7 +564,7 @@ fn textarea_home_after_end_on_full_soft_wrapped_row_returns_to_same_visual_row_s
 }
 
 #[test]
-fn textarea_end_on_full_final_visual_row_renders_cursor_on_final_grapheme() {
+fn textarea_end_on_visual_row_uses_reserved_cursor_cell() {
     let mut input = Textarea::new();
     input.set_value("abc").set_cursor(1);
 
@@ -434,8 +572,8 @@ fn textarea_end_on_full_final_visual_row_renders_cursor_on_final_grapheme() {
 
     let rendered = input.render(5);
 
-    assert_eq!(plain_lines(&rendered), vec!["› abc"]);
-    assert_eq!(input.cursor(), 3);
+    assert_eq!(plain_lines(&rendered), vec!["› ab ", "  c"]);
+    assert_eq!(input.cursor(), 2);
     assert_eq!(
         rendered.lines()[0].spans().last().unwrap().style(),
         Style::new().reversed()
@@ -443,7 +581,7 @@ fn textarea_end_on_full_final_visual_row_renders_cursor_on_final_grapheme() {
 }
 
 #[test]
-fn textarea_public_line_end_on_full_rendered_row_renders_cursor_on_final_grapheme() {
+fn textarea_public_line_end_renders_reserved_cursor_cell() {
     let mut input = Textarea::new();
     input.set_value("abc").set_cursor(1);
     input.render(5);
@@ -453,15 +591,15 @@ fn textarea_public_line_end_on_full_rendered_row_renders_cursor_on_final_graphem
     let rendered = input.render(5);
 
     assert_eq!(input.cursor(), 3);
-    assert_eq!(plain_lines(&rendered), vec!["› abc"]);
+    assert_eq!(plain_lines(&rendered), vec!["› ab", "  c "]);
     assert_eq!(
-        rendered.lines()[0].spans().last().unwrap().style(),
+        rendered.lines()[1].spans().last().unwrap().style(),
         Style::new().reversed()
     );
 }
 
 #[test]
-fn textarea_public_buffer_end_on_full_rendered_row_renders_cursor_on_final_grapheme() {
+fn textarea_public_buffer_end_renders_reserved_cursor_cell() {
     let mut input = Textarea::new();
     input.set_value("abc").set_cursor(1);
     input.render(5);
@@ -471,15 +609,15 @@ fn textarea_public_buffer_end_on_full_rendered_row_renders_cursor_on_final_graph
     let rendered = input.render(5);
 
     assert_eq!(input.cursor(), 3);
-    assert_eq!(plain_lines(&rendered), vec!["› abc"]);
+    assert_eq!(plain_lines(&rendered), vec!["› ab", "  c "]);
     assert_eq!(
-        rendered.lines()[0].spans().last().unwrap().style(),
+        rendered.lines()[1].spans().last().unwrap().style(),
         Style::new().reversed()
     );
 }
 
 #[test]
-fn textarea_control_e_on_full_final_visual_row_renders_cursor_on_final_grapheme() {
+fn textarea_control_e_renders_reserved_cursor_cell() {
     let mut input = Textarea::new();
     input.set_value("abc").set_cursor(1);
 
@@ -491,9 +629,9 @@ fn textarea_control_e_on_full_final_visual_row_renders_cursor_on_final_grapheme(
     let rendered = input.render(5);
 
     assert_eq!(input.cursor(), 3);
-    assert_eq!(plain_lines(&rendered), vec!["› abc"]);
+    assert_eq!(plain_lines(&rendered), vec!["› ab", "  c "]);
     assert_eq!(
-        rendered.lines()[0].spans().last().unwrap().style(),
+        rendered.lines()[1].spans().last().unwrap().style(),
         Style::new().reversed()
     );
 }
@@ -507,7 +645,7 @@ fn textarea_end_on_row_with_hidden_wrap_whitespace_renders_cursor_space_on_previ
 
     let rendered = input.render(5);
 
-    assert_eq!(input.cursor(), 3);
+    assert_eq!(input.cursor(), 2);
     assert_eq!(plain_lines(&rendered), vec!["› ab ", "  cd"]);
     assert_eq!(
         rendered.lines()[0].spans().last().unwrap().style(),
@@ -523,7 +661,7 @@ fn textarea_vertical_movement_after_full_row_end_starts_from_rendered_row() {
     input.handle_key_event_with_width(KeyEvent::new(KeyCode::End), 5);
     input.handle_key_event_with_width(KeyEvent::new(KeyCode::Down), 5);
 
-    assert_eq!(input.cursor(), 5);
+    assert_eq!(input.cursor(), 4);
 }
 
 #[test]
@@ -537,9 +675,12 @@ fn textarea_up_to_full_shorter_row_renders_cursor_on_that_row_end() {
     let rendered = input.render(5);
 
     assert_eq!(input.cursor(), 3);
-    assert_eq!(plain_lines(&rendered), vec!["› abc", "  def", "  ghi"]);
     assert_eq!(
-        rendered.lines()[0].spans().last().unwrap().style(),
+        plain_lines(&rendered),
+        vec!["› ab", "  c ", "  de", "  fg", "  hi"]
+    );
+    assert_eq!(
+        rendered.lines()[1].spans().last().unwrap().style(),
         Style::new().reversed()
     );
 }
@@ -557,7 +698,7 @@ fn textarea_navigation_without_cursor_motion_resets_full_row_end_affinity() {
 
     let rendered = input.render(5);
 
-    assert_eq!(input.cursor(), 3);
+    assert_eq!(input.cursor(), 2);
     assert_eq!(
         rendered.lines()[0].spans().last().unwrap().style(),
         Style::new()
@@ -580,7 +721,7 @@ fn textarea_editing_resets_full_row_end_affinity() {
     let rendered = input.render(5);
 
     assert_eq!(input.value(), "abcdef");
-    assert_eq!(input.cursor(), 3);
+    assert_eq!(input.cursor(), 2);
     assert_eq!(
         rendered.lines()[0].spans().last().unwrap().style(),
         Style::new()
@@ -619,9 +760,9 @@ fn textarea_moves_to_source_line_and_visual_row_boundaries() {
     input.move_to_line_end();
     assert_eq!(input.cursor(), input.value().len());
 
-    input.set_cursor(4); // first source line, second visual row at width 5.
+    input.set_cursor(4); // first source line, third visual row at width 5.
     input.move_to_visual_row_start_with_width(5);
-    assert_eq!(input.cursor(), 3);
+    assert_eq!(input.cursor(), 4);
     input.move_to_visual_row_end_with_width(5);
     assert_eq!(input.cursor(), 5);
 }
@@ -633,7 +774,7 @@ fn textarea_moves_vertically_by_visual_rows_preserving_column() {
     input.set_cursor(4);
 
     input.move_visual_down_with_width(5);
-    assert_eq!(input.cursor(), 7);
+    assert_eq!(input.cursor(), 6);
     input.move_visual_up_with_width(5);
     assert_eq!(input.cursor(), 4);
 }
@@ -646,7 +787,7 @@ fn textarea_visual_navigation_uses_width_learned_through_padding_render() {
     padded.render(7);
 
     padded.content_mut().move_visual_down();
-    assert_eq!(padded.content().cursor(), 7);
+    assert_eq!(padded.content().cursor(), 6);
 }
 
 #[test]
@@ -659,7 +800,7 @@ fn textarea_key_navigation_uses_last_rendered_width() {
         input.handle_key_event(KeyEvent::new(KeyCode::Down)),
         KeyOutcome::Changed
     );
-    assert_eq!(input.cursor(), 7);
+    assert_eq!(input.cursor(), 6);
 }
 
 #[test]
@@ -670,7 +811,7 @@ fn textarea_keeps_navigation_width_when_value_reset_clears_scroll() {
 
     input.move_visual_down();
 
-    assert_eq!(input.cursor(), 7);
+    assert_eq!(input.cursor(), 6);
 }
 
 #[test]
@@ -704,7 +845,7 @@ fn textarea_explicit_width_navigation_does_not_replace_rendered_width() {
     assert_eq!(input.cursor(), 10);
 
     input.set_cursor(4).move_visual_down();
-    assert_eq!(input.cursor(), 7);
+    assert_eq!(input.cursor(), 6);
 }
 
 #[test]
@@ -786,13 +927,13 @@ fn textarea_ignores_releases_unsupported_keys_and_command_modified_text() {
 #[test]
 fn textarea_handles_line_and_visual_boundary_shortcuts() {
     let mut input = Textarea::new();
-    input.set_value("abcde\nfghij").set_cursor(4);
+    input.set_value("abcde\nfghij").set_cursor(3);
 
     assert_eq!(
         input.handle_key_event_with_width(KeyEvent::new(KeyCode::Home), 5),
         KeyOutcome::Changed
     );
-    assert_eq!(input.cursor(), 3);
+    assert_eq!(input.cursor(), 2);
 
     assert_eq!(
         input.handle_key_event_with_width(
