@@ -428,9 +428,10 @@ impl Textarea {
     /// are ignored.
     ///
     /// Default behavior includes text insertion, grapheme-aware deletion,
-    /// visual-row arrow movement, word movement with control/alt arrows,
-    /// readline-style control-A/control-E source-line movement, tab insertion,
-    /// `Enter` submission, and newline insertion with alt-enter or shift-enter.
+    /// visual-row arrow movement, word movement with control/alt arrows and
+    /// alt-B/alt-F terminal aliases, readline-style control-A/control-E
+    /// source-line movement, tab insertion, `Enter` submission, and newline
+    /// insertion with alt-enter or shift-enter.
     /// Pre-handle application shortcuts before calling this method when you need
     /// custom behavior.
     pub fn handle_key_event(&mut self, event: impl Into<KeyEvent>) -> KeyOutcome {
@@ -483,6 +484,16 @@ impl Textarea {
             KeyCode::Delete => self.changed_by(|textarea| {
                 textarea.delete();
             }),
+            KeyCode::Char('b' | 'B') if modifiers.contains(KeyModifiers::ALT) => {
+                self.changed_by(|textarea| {
+                    textarea.move_word_left();
+                })
+            }
+            KeyCode::Char('f' | 'F') if modifiers.contains(KeyModifiers::ALT) => {
+                self.changed_by(|textarea| {
+                    textarea.move_word_right();
+                })
+            }
             KeyCode::Left if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.changed_by(|textarea| {
                     textarea.move_word_left();

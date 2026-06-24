@@ -7,6 +7,7 @@ use crossterm::{
     event::{
         self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode as CrosstermKeyCode,
         KeyEvent as CrosstermKeyEvent, KeyEventKind, KeyModifiers as CrosstermKeyModifiers,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute, terminal as crossterm_terminal,
 };
@@ -257,23 +258,36 @@ struct InteractiveSession {
     terminal: Terminal<StdoutBackend<io::Stdout>>,
     raw_mode: bool,
     bracketed_paste: bool,
+    keyboard_enhancement: bool,
 }
 
 impl InteractiveSession {
     fn start() -> io::Result<Self> {
         crossterm_terminal::enable_raw_mode()?;
-        if let Err(error) = execute!(io::stdout(), EnableBracketedPaste) {
+
+        let mut stdout = io::stdout();
+        if let Err(error) = execute!(stdout, EnableBracketedPaste) {
             let _ = crossterm_terminal::disable_raw_mode();
             return Err(error);
         }
+
+        let keyboard_enhancement = execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES),
+        )
+        .is_ok();
 
         match Terminal::stdout() {
             Ok(terminal) => Ok(Self {
                 terminal,
                 raw_mode: true,
                 bracketed_paste: true,
+                keyboard_enhancement,
             }),
             Err(error) => {
+                if keyboard_enhancement {
+                    let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+                }
                 let _ = execute!(io::stdout(), DisableBracketedPaste);
                 let _ = crossterm_terminal::disable_raw_mode();
                 Err(error)
@@ -287,6 +301,10 @@ impl InteractiveSession {
 
     fn finish(&mut self) -> io::Result<()> {
         self.terminal.finish()?;
+        if self.keyboard_enhancement {
+            execute!(io::stdout(), PopKeyboardEnhancementFlags)?;
+            self.keyboard_enhancement = false;
+        }
         if self.bracketed_paste {
             execute!(io::stdout(), DisableBracketedPaste)?;
             self.bracketed_paste = false;
@@ -302,6 +320,10 @@ impl InteractiveSession {
 impl Drop for InteractiveSession {
     fn drop(&mut self) {
         let _ = self.terminal.finish();
+        if self.keyboard_enhancement {
+            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+            self.keyboard_enhancement = false;
+        }
         if self.bracketed_paste {
             let _ = execute!(io::stdout(), DisableBracketedPaste);
             self.bracketed_paste = false;

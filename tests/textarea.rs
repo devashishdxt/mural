@@ -902,6 +902,36 @@ fn textarea_handles_default_navigation_and_deletion_keys() {
 }
 
 #[test]
+fn textarea_handles_alt_word_navigation_shortcuts() {
+    let mut input = Textarea::new();
+    input.set_value("hello brave world");
+
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Left).modifier(KeyModifiers::ALT)),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.cursor(), 12);
+
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Char('b')).modifier(KeyModifiers::ALT)),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.cursor(), 6);
+
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Char('f')).modifier(KeyModifiers::ALT)),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.cursor(), 11);
+
+    assert_eq!(
+        input.handle_key_event(KeyEvent::new(KeyCode::Right).modifier(KeyModifiers::ALT)),
+        KeyOutcome::Changed
+    );
+    assert_eq!(input.cursor(), 17);
+}
+
+#[test]
 fn textarea_ignores_releases_unsupported_keys_and_command_modified_text() {
     let mut input = Textarea::new();
 
