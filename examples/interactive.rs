@@ -12,14 +12,14 @@ use crossterm::{
     execute, terminal as crossterm_terminal,
 };
 use mural::{
-    Color, Hr, KeyOutcome, Line, ListItem, Padding, Render, Size, Span, StdoutBackend, Style,
-    Terminal, Text, TextError, Textarea,
+    Color, Hr, KeyOutcome, Line, ListItem, Padding, Render, Size, Span, Spinner, StdoutBackend,
+    Style, Terminal, Text, TextError, Textarea,
 };
 
 const FPS: u64 = 30;
 const FRAME_DELAY: Duration = Duration::from_millis(1_000 / FPS);
 const ID_INPUT: &str = "input";
-const ID_PREVIEW: &str = "preview";
+const ID_TYPING: &str = "typing";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run this example manually in a real terminal:
@@ -41,33 +41,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn setup_ui(
     terminal: &mut Terminal<StdoutBackend<io::Stdout>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    terminal.insert_pinned(ID_PREVIEW, Preview::default())?;
+    terminal.push_pinned(Text::from_plain("")?)?;
+    terminal.insert_pinned(ID_TYPING, pinned(TypingIndicator::new()?))?;
     terminal.push_pinned(separator())?;
     terminal.insert_pinned(
         ID_INPUT,
-        Textarea::new()
-            .placeholder("type something…")?
-            .placeholder_style(Style::new().fg(Color::BrightBlack).dim())
-            .max_height(5),
+        pinned(
+            Textarea::new()
+                .placeholder("type something…")?
+                .placeholder_style(Style::new().dim().italic())
+                .prompt_style(Style::new().fg(Color::Cyan))
+                .max_height(5),
+        ),
     )?;
     terminal.push_pinned(separator())?;
-    terminal.push_pinned(help_text()?)?;
+    terminal.push_pinned(pinned(help_text()?))?;
     terminal.render()?;
     Ok(())
 }
 
 fn run_event_loop(session: &mut InteractiveSession) -> Result<(), Box<dyn std::error::Error>> {
     let mut dirty = false;
+    let mut animate = false;
     let mut last_render = Instant::now();
 
     loop {
-        if dirty && last_render.elapsed() >= FRAME_DELAY {
+        let should_render = dirty || animate;
+        if should_render && last_render.elapsed() >= FRAME_DELAY {
             session.terminal_mut().render()?;
             last_render = Instant::now();
             dirty = false;
         }
 
-        let poll_timeout = if dirty {
+        let poll_timeout = if should_render {
             FRAME_DELAY.saturating_sub(last_render.elapsed())
         } else {
             FRAME_DELAY
@@ -82,14 +88,18 @@ fn run_event_loop(session: &mut InteractiveSession) -> Result<(), Box<dyn std::e
                 if should_quit(key) {
                     break;
                 }
-                dirty |= handle_input_key(session.terminal_mut(), key)?;
+                let (changed, typing) = handle_input_key(session.terminal_mut(), key)?;
+                dirty |= changed;
+                if let Some(typing) = typing {
+                    animate = typing;
+                }
             }
             Event::Resize(width, height) => {
                 session.terminal_mut().resize(Size::new(width, height))?;
                 dirty = true;
             }
             Event::Paste(text) => {
-                handle_paste(session.terminal_mut(), text)?;
+                animate = handle_paste(session.terminal_mut(), text)?;
                 dirty = true;
             }
             Event::FocusGained | Event::FocusLost | Event::Mouse(_) => {}
@@ -106,54 +116,59 @@ fn run_event_loop(session: &mut InteractiveSession) -> Result<(), Box<dyn std::e
 fn handle_input_key(
     terminal: &mut Terminal<StdoutBackend<io::Stdout>>,
     key: CrosstermKeyEvent,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<(bool, Option<bool>), Box<dyn std::error::Error>> {
     let outcome = terminal
-        .pinned_block_mut::<Textarea>(ID_INPUT)?
+        .pinned_block_mut::<Padding<Textarea>>(ID_INPUT)?
+        .content_mut()
         .handle_key_event(key);
 
-    match outcome {
-        KeyOutcome::Submit => submit_input(terminal)?,
-        KeyOutcome::Changed | KeyOutcome::Unchanged => update_preview(terminal)?,
-        KeyOutcome::Ignored => {}
-    }
+    let typing = match outcome {
+        KeyOutcome::Submit => Some(submit_input(terminal)?),
+        KeyOutcome::Changed | KeyOutcome::Unchanged => Some(update_typing_indicator(terminal)?),
+        KeyOutcome::Ignored => None,
+    };
 
-    Ok(!matches!(outcome, KeyOutcome::Ignored))
+    Ok((!matches!(outcome, KeyOutcome::Ignored), typing))
 }
 
 fn handle_paste(
     terminal: &mut Terminal<StdoutBackend<io::Stdout>>,
     text: String,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error>> {
     terminal
-        .pinned_block_mut::<Textarea>(ID_INPUT)?
+        .pinned_block_mut::<Padding<Textarea>>(ID_INPUT)?
+        .content_mut()
         .insert_str(text);
-    update_preview(terminal)?;
-    Ok(())
+    update_typing_indicator(terminal)
 }
 
 fn submit_input(
     terminal: &mut Terminal<StdoutBackend<io::Stdout>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let submitted = terminal.pinned_block_mut::<Textarea>(ID_INPUT)?.take();
-    if submitted.is_empty() {
-        update_preview(terminal)?;
-        return Ok(());
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let submitted = terminal
+        .pinned_block_mut::<Padding<Textarea>>(ID_INPUT)?
+        .content_mut()
+        .take();
+    if !submitted.is_empty() {
+        terminal.push_live(submitted_message(&submitted)?)?;
     }
 
-    terminal.push_live(submitted_message(&submitted)?)?;
-    update_preview(terminal)?;
-    Ok(())
+    update_typing_indicator(terminal)
 }
 
-fn update_preview(
+fn update_typing_indicator(
     terminal: &mut Terminal<StdoutBackend<io::Stdout>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let value = terminal
-        .pinned_block_mut::<Textarea>(ID_INPUT)?
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let is_typing = !terminal
+        .pinned_block_mut::<Padding<Textarea>>(ID_INPUT)?
+        .content_mut()
         .value()
-        .to_owned();
-    terminal.pinned_block_mut::<Preview>(ID_PREVIEW)?.value = value;
-    Ok(())
+        .is_empty();
+    terminal
+        .pinned_block_mut::<Padding<TypingIndicator>>(ID_TYPING)?
+        .content_mut()
+        .set_visible(is_typing);
+    Ok(is_typing)
 }
 
 fn should_quit(key: CrosstermKeyEvent) -> bool {
@@ -176,14 +191,18 @@ fn submitted_message(content: &str) -> Result<Padding<ListItem<Text>>, TextError
     .left(1))
 }
 
+fn pinned<T>(block: T) -> Padding<T> {
+    Padding::new(block).left(1)
+}
+
 fn separator() -> Hr {
-    Hr::new().style(Style::new().fg(Color::BrightBlack))
+    Hr::new().style(Style::new().fg(Color::Cyan))
 }
 
 fn help_text() -> Result<Text, TextError> {
     styled_text(
         "Enter submit · Shift/Alt+Enter newline · Esc/Ctrl+C quit",
-        Style::new().fg(Color::BrightWhite),
+        Style::new().dim(),
     )
 }
 
@@ -193,25 +212,39 @@ fn styled_text(content: &str, style: Style) -> Result<Text, TextError> {
     )?])]))
 }
 
-#[derive(Default)]
-struct Preview {
-    value: String,
+struct TypingIndicator {
+    spinner: Spinner,
+    visible: bool,
 }
 
-impl Render for Preview {
-    fn render(&self, width: u16) -> Text {
-        if self.value.is_empty() {
-            return Text::empty();
-        }
+impl TypingIndicator {
+    fn new() -> Result<Self, TextError> {
+        Ok(Self {
+            spinner: Spinner::new(styled_text("Typing...", Style::new().dim().italic())?)
+                .spinner_style(Style::new().fg(Color::BrightYellow)),
+            visible: false,
+        })
+    }
 
-        ListItem::new(
-            Text::from_raw_lossy(&self.value).expect("textarea content is sanitized text"),
-        )
-        .bullet("~")
-        .expect("preview bullet is static valid text")
-        .bullet_style(Style::new().fg(Color::BrightYellow).dim())
-        .gap(1)
-        .render(width)
+    fn set_visible(&mut self, visible: bool) {
+        if visible && !self.visible {
+            self.spinner.reset();
+        }
+        self.visible = visible;
+    }
+}
+
+impl Render for TypingIndicator {
+    fn render(&self, width: u16) -> Text {
+        if self.visible {
+            self.spinner.render(width)
+        } else {
+            Text::empty()
+        }
+    }
+
+    fn render_every_frame(&self) -> bool {
+        self.visible && self.spinner.render_every_frame()
     }
 }
 
