@@ -16,7 +16,7 @@ use mural::{
     Style, Terminal, Text, TextError, Textarea,
 };
 
-const FPS: u64 = 30;
+const FPS: u64 = 15;
 const FRAME_DELAY: Duration = Duration::from_millis(1_000 / FPS);
 const ID_INPUT: &str = "input";
 const ID_TYPING: &str = "typing";

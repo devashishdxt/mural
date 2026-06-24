@@ -12,7 +12,10 @@ use self::{
         next_grapheme_boundary, next_word_end, previous_grapheme_boundary, previous_word_start,
         sanitize_input, text_insertion_modifiers,
     },
-    rendering::{ContentRow, CursorUnit, RenderCursor, push_rendered_fragments},
+    rendering::{
+        ContentRow, CursorUnit, RenderCursor, WrappedRenderTarget, push_rendered_fragments,
+        push_rendered_fragments_wrapped,
+    },
     source::{
         WrappedSourceRow, editable_wrap_width, last_rendered_grapheme_end,
         rendered_source_row_width, wrapped_source_rows,
@@ -853,26 +856,33 @@ impl Textarea {
         let mut cursor_row = 0;
 
         for (index, source_row) in source_rows.iter().enumerate() {
-            let cursor_rendered_before_row = render_cursor.rendered;
+            let next_row = source_rows.get(index + 1);
             let prefers_previous_row = self.row_prefers_previous_visual_row(source_row);
-            let mut row = self.render_source_row(source_row, content_width, &mut render_cursor);
+            let mut row = ContentRow::default();
 
-            if !cursor_rendered_before_row && render_cursor.rendered {
-                cursor_row = rows.len();
+            if let Some(rendered_cursor_row) = self.render_source_row(
+                source_row,
+                next_row,
+                content_width,
+                &mut rows,
+                &mut row,
+                &mut render_cursor,
+            ) {
+                cursor_row = rendered_cursor_row;
             }
 
             if self.should_render_cursor_after_source_row(
                 source_row,
-                source_rows.get(index + 1),
+                next_row,
                 prefers_previous_row,
                 &render_cursor,
             ) {
-                row.push_unit(
-                    CursorUnit::space(self.cursor_style),
-                    content_width,
-                    &mut rows,
-                );
-                cursor_row = rows.len();
+                let rendered_cursor_row = {
+                    let mut target = WrappedRenderTarget::new(&mut row, &mut rows, content_width);
+                    target.push_unit(CursorUnit::space(self.cursor_style), true);
+                    target.cursor_row()
+                };
+                cursor_row = rendered_cursor_row.unwrap_or(rows.len());
                 render_cursor.rendered = true;
             }
 
@@ -885,27 +895,43 @@ impl Textarea {
     fn render_source_row(
         &self,
         source_row: &WrappedSourceRow,
+        next_row: Option<&WrappedSourceRow>,
         content_width: usize,
+        rows: &mut Vec<Vec<Span>>,
+        row: &mut ContentRow,
         render_cursor: &mut RenderCursor,
-    ) -> ContentRow {
+    ) -> Option<usize> {
         let prefers_previous_row = self.row_prefers_previous_visual_row(source_row);
+        let include_trailing_whitespace =
+            self.should_render_trailing_whitespace(source_row, next_row);
         render_cursor.overlay_grapheme_end = if prefers_previous_row
-            && rendered_source_row_width(&self.value, source_row) >= content_width
+            && rendered_source_row_width(&self.value, source_row, include_trailing_whitespace)
+                >= content_width
         {
-            last_rendered_grapheme_end(&self.value, source_row)
+            last_rendered_grapheme_end(&self.value, source_row, include_trailing_whitespace)
         } else {
             None
         };
 
-        let mut row = ContentRow::default();
-        push_rendered_fragments(
-            &mut row,
+        let mut target = WrappedRenderTarget::new(row, rows, content_width);
+        push_rendered_fragments_wrapped(
+            &mut target,
             &self.value,
             &source_row.fragments,
             Style::new(),
             render_cursor,
+            include_trailing_whitespace,
         );
-        row
+        target.cursor_row()
+    }
+
+    fn should_render_trailing_whitespace(
+        &self,
+        source_row: &WrappedSourceRow,
+        next_row: Option<&WrappedSourceRow>,
+    ) -> bool {
+        source_row.visible_end < source_row.end
+            && !next_row.is_some_and(|next| next.start == source_row.end)
     }
 
     fn row_prefers_previous_visual_row(&self, source_row: &WrappedSourceRow) -> bool {

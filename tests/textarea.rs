@@ -254,6 +254,65 @@ fn textarea_word_movement_resets_preferred_visual_column() {
 }
 
 #[test]
+fn textarea_renders_leading_space_before_the_cursor() {
+    let mut input = Textarea::new();
+    let before = input.render(20);
+
+    input.insert_char(' ');
+    let after = input.render(20);
+
+    assert_ne!(before.lines()[0], after.lines()[0]);
+    assert_eq!(after.lines()[0].plain_content(), "›   ");
+    assert_eq!(
+        after.lines()[0],
+        Line::from_spans(vec![
+            Span::plain("›").unwrap(),
+            Span::plain(" ").unwrap(),
+            Span::plain(" ").unwrap(),
+            Span::new(" ", Style::new().reversed()).unwrap(),
+        ])
+    );
+}
+
+#[test]
+fn textarea_renders_trailing_spaces_before_the_cursor() {
+    let mut input = Textarea::new();
+    input.set_value("hello");
+    let before = input.render(20);
+
+    input.insert_char(' ');
+    let after = input.render(20);
+
+    assert_ne!(before.lines()[0], after.lines()[0]);
+    assert_eq!(after.lines()[0].plain_content(), "› hello  ");
+    assert_eq!(
+        after.lines()[0],
+        Line::from_spans(vec![
+            Span::plain("›").unwrap(),
+            Span::plain(" ").unwrap(),
+            Span::plain("hello ").unwrap(),
+            Span::new(" ", Style::new().reversed()).unwrap(),
+        ])
+    );
+}
+
+#[test]
+fn textarea_wraps_cursor_after_trailing_space_when_reserved_cell_is_full() {
+    let mut input = Textarea::new();
+    input.set_value("hello ");
+
+    let rendered = input.render(8);
+
+    assert_eq!(plain_lines(&rendered), vec!["› hello ", "   "]);
+    assert_eq!(rendered.lines()[0].display_width(), 8);
+    assert_eq!(rendered.lines()[1].display_width(), 3);
+    assert_eq!(
+        rendered.lines()[1].spans().last().unwrap().style(),
+        Style::new().reversed()
+    );
+}
+
+#[test]
 fn textarea_renders_tab_as_four_spaces_and_cursor_styles_only_first_tab_cell() {
     let mut input = Textarea::new();
     input.set_value("a\tb").set_cursor(1);

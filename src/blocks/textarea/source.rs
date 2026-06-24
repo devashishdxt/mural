@@ -94,8 +94,12 @@ fn visible_end_for_fragments(fragments: &[WrappedFragment]) -> Option<usize> {
         .max()
 }
 
-pub(super) fn last_rendered_grapheme_end(source: &str, row: &WrappedSourceRow) -> Option<usize> {
-    rendered_ranges(row)
+pub(super) fn last_rendered_grapheme_end(
+    source: &str,
+    row: &WrappedSourceRow,
+    include_trailing_whitespace: bool,
+) -> Option<usize> {
+    rendered_ranges(row, include_trailing_whitespace)
         .flat_map(|range| {
             range
                 .text(source)
@@ -105,18 +109,26 @@ pub(super) fn last_rendered_grapheme_end(source: &str, row: &WrappedSourceRow) -
         .last()
 }
 
-pub(super) fn rendered_source_row_width(source: &str, row: &WrappedSourceRow) -> usize {
-    rendered_ranges(row)
+pub(super) fn rendered_source_row_width(
+    source: &str,
+    row: &WrappedSourceRow,
+    include_trailing_whitespace: bool,
+) -> usize {
+    rendered_ranges(row, include_trailing_whitespace)
         .map(|range| range.display_width_by(source, textarea_display_width))
         .sum()
 }
 
-fn rendered_ranges(row: &WrappedSourceRow) -> impl Iterator<Item = SourceRange> + '_ {
+fn rendered_ranges(
+    row: &WrappedSourceRow,
+    include_trailing_whitespace: bool,
+) -> impl Iterator<Item = SourceRange> + '_ {
     row.fragments
         .iter()
         .enumerate()
-        .flat_map(|(index, fragment)| {
-            let include_whitespace = index + 1 < row.fragments.len();
+        .flat_map(move |(index, fragment)| {
+            let include_whitespace = index + 1 < row.fragments.len()
+                || (include_trailing_whitespace && !fragment.whitespace_range.is_empty());
             std::iter::once(fragment.word_range)
                 .chain(include_whitespace.then_some(fragment.whitespace_range))
         })
