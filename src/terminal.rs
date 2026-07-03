@@ -1,8 +1,11 @@
-use crate::{Backend, Block, CursorPosition, TerminalError, TerminalSize, region::Region};
+use crate::{
+    Backend, Block, CursorPosition, LifecycleError, TerminalError, TerminalSize, region::Region,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Lifecycle {
     Running,
+    Finishing { final_render_complete: bool },
     Finished,
 }
 
@@ -147,6 +150,12 @@ impl<B: Backend> Terminal<B> {
     }
 
     pub fn render(&mut self) -> Result<(), TerminalError<B::Error>> {
+        if self.lifecycle != Lifecycle::Running {
+            return Err(TerminalError::Lifecycle(
+                LifecycleError::RenderAfterFinishStarted,
+            ));
+        }
+
         let frame = current_frame(
             &mut self.live_blocks,
             &mut self.pinned_blocks,
@@ -162,6 +171,48 @@ impl<B: Backend> Terminal<B> {
             lines: frame.clone(),
             sentinel_row: frame.len(),
         });
+        Ok(())
+    }
+
+    pub fn finish(&mut self) -> Result<(), TerminalError<B::Error>> {
+        match self.lifecycle {
+            Lifecycle::Running => {
+                self.lifecycle = Lifecycle::Finishing {
+                    final_render_complete: false,
+                };
+            }
+            Lifecycle::Finishing { .. } => {}
+            Lifecycle::Finished => {
+                return Err(TerminalError::Lifecycle(LifecycleError::AlreadyFinished));
+            }
+        }
+
+        if matches!(
+            self.lifecycle,
+            Lifecycle::Finishing {
+                final_render_complete: false,
+            }
+        ) {
+            let frame = self
+                .live_blocks
+                .render_lines(self.size.width.saturating_sub(1));
+            if frame_changed(self.last_committed_frame.as_ref(), &frame) {
+                render_full_frame(&mut self.backend, &frame)?;
+            }
+            self.backend.flush()?;
+            self.live_blocks.mark_all_clean();
+            self.last_committed_frame = Some(CommittedFrame {
+                lines: frame.clone(),
+                sentinel_row: frame.len(),
+            });
+            self.lifecycle = Lifecycle::Finishing {
+                final_render_complete: true,
+            };
+        }
+
+        self.backend.show_cursor()?;
+        self.backend.flush()?;
+        self.lifecycle = Lifecycle::Finished;
         Ok(())
     }
 }
@@ -280,13 +331,28 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct FailOnSecondFlushBackend {
         operations: Rc<RefCell<Vec<Operation>>>,
         flushes: Rc<RefCell<usize>>,
+        fail_on_flush: usize,
+    }
+
+    impl Default for FailOnSecondFlushBackend {
+        fn default() -> Self {
+            Self::fail_on_flush(2)
+        }
     }
 
     impl FailOnSecondFlushBackend {
+        fn fail_on_flush(fail_on_flush: usize) -> Self {
+            Self {
+                operations: Rc::default(),
+                flushes: Rc::default(),
+                fail_on_flush,
+            }
+        }
+
         fn operations(&self) -> Vec<Operation> {
             self.operations.borrow().clone()
         }
@@ -394,7 +460,7 @@ mod tests {
             self.record(Operation::Flush);
             let mut flushes = self.flushes.borrow_mut();
             *flushes += 1;
-            if *flushes == 2 {
+            if *flushes == self.fail_on_flush {
                 Err(FlushFailed)
             } else {
                 Ok(())
@@ -1042,6 +1108,293 @@ mod tests {
             .unwrap();
         terminal.render().unwrap();
         assert_eq!(block.render_count(), 2);
+    }
+
+    #[test]
+    fn finish_renders_live_only_restores_cursor_flushes_and_completes() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("final live");
+        terminal.push_pinned("transient pinned");
+        terminal.finish().unwrap();
+
+        assert_eq!(terminal.lifecycle, Lifecycle::Finished);
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("final live".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ShowCursor,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn render_errors_after_finish_starts_even_when_finish_fails() {
+        let backend = FailOnSecondFlushBackend::default();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("final live");
+        assert!(terminal.finish().is_err());
+
+        let err = terminal.render().err().expect("render should be rejected");
+        assert!(matches!(
+            err,
+            TerminalError::Lifecycle(LifecycleError::RenderAfterFinishStarted)
+        ));
+    }
+
+    #[test]
+    fn retry_finish_after_failed_final_render_rerenders_current_live_region() {
+        let backend = FailOnSecondFlushBackend::default();
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("first");
+        assert!(terminal.finish().is_err());
+        terminal.clear_live();
+        terminal.push_live("second");
+
+        terminal.finish().unwrap();
+
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("first".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("second".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ShowCursor,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn retry_finish_after_final_render_succeeds_retries_only_cursor_restore_and_flush() {
+        let backend = FailOnSecondFlushBackend::fail_on_flush(3);
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("already rendered");
+        assert!(terminal.finish().is_err());
+        terminal.clear_live();
+        terminal.push_live("should stay memory-only");
+
+        terminal.finish().unwrap();
+
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("already rendered".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ShowCursor,
+                Operation::Flush,
+                Operation::ShowCursor,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn mutations_after_finished_are_memory_only_and_do_not_enable_render() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.finish().unwrap();
+        terminal.insert_live("live", NamedBlock("stored live"));
+        terminal.insert_pinned("pinned", NamedBlock("stored pinned"));
+
+        assert_eq!(
+            terminal
+                .get_live::<NamedBlock, _>("live")
+                .map(|block| block.0),
+            Some("stored live")
+        );
+        assert_eq!(
+            terminal
+                .get_pinned::<NamedBlock, _>("pinned")
+                .map(|block| block.0),
+            Some("stored pinned")
+        );
+        let err = terminal
+            .render()
+            .err()
+            .expect("render should stay rejected");
+        assert!(matches!(
+            err,
+            TerminalError::Lifecycle(LifecycleError::RenderAfterFinishStarted)
+        ));
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Flush,
+                Operation::ShowCursor,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn finish_after_finished_errors_and_drop_writes_no_cleanup() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+
+        {
+            let mut terminal = Terminal::new(
+                backend,
+                TerminalSize {
+                    width: 80,
+                    height: 24,
+                },
+                CursorPosition { row: 0, column: 0 },
+            )
+            .unwrap();
+
+            terminal.push_live("done");
+            terminal.finish().unwrap();
+            let err = terminal.finish().err().expect("second finish should fail");
+            assert!(matches!(
+                err,
+                TerminalError::Lifecycle(LifecycleError::AlreadyFinished)
+            ));
+        }
+
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("done".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ShowCursor,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn finish_preserves_pinned_cache_without_rendering_it() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let pinned = CountingBlock::new("pinned");
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("live");
+        terminal.insert_pinned("status", pinned.clone());
+        terminal.render().unwrap();
+        assert_eq!(pinned.render_count(), 1);
+
+        terminal.finish().unwrap();
+
+        assert_eq!(pinned.render_count(), 1);
+        assert!(terminal.get_pinned::<CountingBlock, _>("status").is_some());
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("live".to_owned()),
+                Operation::Newline,
+                Operation::Write("pinned".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("live".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ShowCursor,
+                Operation::Flush,
+            ]
+        );
     }
 
     #[test]
