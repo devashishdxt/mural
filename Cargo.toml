@@ -1,6 +1,6 @@
 [package]
 name = "mural"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 authors = ["Devashish Dixit <devashishdxt@gmail.com>"]
 description = "Conversational terminal rendering for command-line applications."
@@ -11,9 +11,3 @@ keywords = ["terminal", "tui", "renderer", "ansi", "conversation"]
 categories = ["command-line-interface"]
 
 [dependencies]
-ansi-str = "0.9.0"
-crossterm = "0.29.0"
-textwrap = "0.16.2"
-thiserror = "2.0.18"
-unicode-segmentation = "1.13.3"
-unicode-width = "0.2.2"
