@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{any::Any, borrow::Cow};
 
 /// Renderable content stored by a terminal region.
 pub trait Block {
@@ -26,5 +26,23 @@ impl Block for String {
 impl Block for Cow<'_, str> {
     fn render(&self, width: usize) -> Vec<Cow<'_, str>> {
         drape::wrap(self.as_ref(), width)
+    }
+}
+
+pub(crate) trait ErasedBlock: Block {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+impl<T> ErasedBlock for T
+where
+    T: Block + Any,
+{
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }

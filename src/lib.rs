@@ -1,6 +1,7 @@
 mod backend;
 mod block;
 mod error;
+mod region;
 mod terminal;
 mod types;
 

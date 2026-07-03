@@ -1,6 +1,4 @@
-use std::borrow::Cow;
-
-use crate::{Backend, Block, CursorPosition, TerminalError, TerminalSize};
+use crate::{Backend, Block, CursorPosition, TerminalError, TerminalSize, region::Region};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Lifecycle {
@@ -14,8 +12,8 @@ pub struct Terminal<B: Backend> {
     size: TerminalSize,
     _cursor: CursorPosition,
     lifecycle: Lifecycle,
-    live_blocks: Vec<Box<dyn Block>>,
-    pinned_blocks: Vec<Box<dyn Block>>,
+    live_blocks: Region,
+    pinned_blocks: Region,
     last_committed_frame: Option<CommittedFrame>,
 }
 
@@ -43,8 +41,8 @@ impl<B: Backend> Terminal<B> {
             size,
             _cursor: cursor,
             lifecycle: Lifecycle::Running,
-            live_blocks: Vec::new(),
-            pinned_blocks: Vec::new(),
+            live_blocks: Region::default(),
+            pinned_blocks: Region::default(),
             last_committed_frame: None,
         })
     }
@@ -53,55 +51,132 @@ impl<B: Backend> Terminal<B> {
     where
         BlockType: Block + 'static,
     {
-        self.live_blocks.push(Box::new(block));
+        self.live_blocks.push(block);
     }
 
     pub fn push_pinned<BlockType>(&mut self, block: BlockType)
     where
         BlockType: Block + 'static,
     {
-        self.pinned_blocks.push(Box::new(block));
+        self.pinned_blocks.push(block);
+    }
+
+    pub fn insert_live<Id, BlockType>(&mut self, id: Id, block: BlockType)
+    where
+        Id: Into<String>,
+        BlockType: Block + 'static,
+    {
+        self.live_blocks.insert(id, block);
+    }
+
+    pub fn insert_pinned<Id, BlockType>(&mut self, id: Id, block: BlockType)
+    where
+        Id: Into<String>,
+        BlockType: Block + 'static,
+    {
+        self.pinned_blocks.insert(id, block);
+    }
+
+    pub fn get_live<BlockType, Id>(&self, id: Id) -> Option<&BlockType>
+    where
+        BlockType: Block + 'static,
+        Id: AsRef<str>,
+    {
+        self.live_blocks.get(id)
+    }
+
+    pub fn get_pinned<BlockType, Id>(&self, id: Id) -> Option<&BlockType>
+    where
+        BlockType: Block + 'static,
+        Id: AsRef<str>,
+    {
+        self.pinned_blocks.get(id)
+    }
+
+    pub fn get_live_mut<BlockType, Id>(&mut self, id: Id) -> Option<&mut BlockType>
+    where
+        BlockType: Block + 'static,
+        Id: AsRef<str>,
+    {
+        self.live_blocks.get_mut(id)
+    }
+
+    pub fn get_pinned_mut<BlockType, Id>(&mut self, id: Id) -> Option<&mut BlockType>
+    where
+        BlockType: Block + 'static,
+        Id: AsRef<str>,
+    {
+        self.pinned_blocks.get_mut(id)
+    }
+
+    pub fn remove_live<Id>(&mut self, id: Id) -> bool
+    where
+        Id: AsRef<str>,
+    {
+        self.live_blocks.remove(id)
+    }
+
+    pub fn remove_pinned<Id>(&mut self, id: Id) -> bool
+    where
+        Id: AsRef<str>,
+    {
+        self.pinned_blocks.remove(id)
+    }
+
+    pub fn clear_live(&mut self) {
+        self.live_blocks.clear();
+    }
+
+    pub fn clear_pinned(&mut self) {
+        self.pinned_blocks.clear();
+    }
+
+    pub fn resize(&mut self, size: TerminalSize) -> Result<(), TerminalError<B::Error>> {
+        validate_size(size)?;
+        if size.width != self.size.width {
+            self.live_blocks.mark_all_dirty();
+            self.pinned_blocks.mark_all_dirty();
+        }
+        self.size = size;
+        self.last_committed_frame = None;
+        Ok(())
+    }
+
+    pub fn force_full_redraw(&mut self) {
+        self.last_committed_frame = None;
     }
 
     pub fn render(&mut self) -> Result<(), TerminalError<B::Error>> {
         let frame = current_frame(
-            &self.live_blocks,
-            &self.pinned_blocks,
+            &mut self.live_blocks,
+            &mut self.pinned_blocks,
             self.size.width.saturating_sub(1),
         );
         if frame_changed(self.last_committed_frame.as_ref(), &frame) {
             render_full_frame(&mut self.backend, &frame)?;
         }
         self.backend.flush()?;
+        self.live_blocks.mark_all_clean();
+        self.pinned_blocks.mark_all_clean();
         self.last_committed_frame = Some(CommittedFrame {
-            lines: frame.iter().map(|line| line.to_string()).collect(),
+            lines: frame.clone(),
             sentinel_row: frame.len(),
         });
         Ok(())
     }
 }
 
-fn current_frame<'a>(
-    live_blocks: &'a [Box<dyn Block>],
-    pinned_blocks: &'a [Box<dyn Block>],
+fn current_frame(
+    live_blocks: &mut Region,
+    pinned_blocks: &mut Region,
     width: usize,
-) -> Vec<Cow<'a, str>> {
-    let mut lines = Vec::new();
-
-    for block in live_blocks.iter().chain(pinned_blocks.iter()) {
-        let rendered_lines = block.render(width);
-        debug_assert!(
-            rendered_lines
-                .iter()
-                .all(|line| !line.contains('\n') && !line.contains('\r'))
-        );
-        lines.extend(rendered_lines);
-    }
-
+) -> Vec<String> {
+    let mut lines = live_blocks.render_lines(width);
+    lines.extend(pinned_blocks.render_lines(width));
     lines
 }
 
-fn frame_changed(last_frame: Option<&CommittedFrame>, current_frame: &[Cow<'_, str>]) -> bool {
+fn frame_changed(last_frame: Option<&CommittedFrame>, current_frame: &[String]) -> bool {
     let Some(last_frame) = last_frame else {
         return true;
     };
@@ -111,12 +186,12 @@ fn frame_changed(last_frame: Option<&CommittedFrame>, current_frame: &[Cow<'_, s
             .lines
             .iter()
             .zip(current_frame)
-            .any(|(last, current)| last.as_str() != current.as_ref())
+            .any(|(last, current)| last != current)
 }
 
 fn render_full_frame<B: Backend>(
     backend: &mut B,
-    frame: &[Cow<'_, str>],
+    frame: &[String],
 ) -> Result<(), TerminalError<B::Error>> {
     backend.clear_screen()?;
     backend.purge_scrollback()?;
@@ -182,7 +257,7 @@ fn normalize_initial_position<B: Backend>(
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, error::Error, fmt, rc::Rc};
+    use std::{borrow::Cow, cell::RefCell, error::Error, fmt, rc::Rc};
 
     use super::*;
     use crate::backend::recording::{Operation, RecordingBackend};
@@ -669,6 +744,304 @@ mod tests {
                 Operation::Flush,
             ]
         );
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct NamedBlock(&'static str);
+
+    impl Block for NamedBlock {
+        fn render(&self, _width: usize) -> Vec<Cow<'_, str>> {
+            vec![Cow::Borrowed(self.0)]
+        }
+    }
+
+    struct OtherBlock;
+
+    impl Block for OtherBlock {
+        fn render(&self, _width: usize) -> Vec<Cow<'_, str>> {
+            vec![Cow::Borrowed("other")]
+        }
+    }
+
+    #[derive(Clone)]
+    struct CountingBlock {
+        text: Rc<RefCell<String>>,
+        renders: Rc<RefCell<usize>>,
+        every_frame: bool,
+    }
+
+    impl CountingBlock {
+        fn new(text: &str) -> Self {
+            Self {
+                text: Rc::new(RefCell::new(text.to_owned())),
+                renders: Rc::new(RefCell::new(0)),
+                every_frame: false,
+            }
+        }
+
+        fn every_frame(text: &str) -> Self {
+            Self {
+                every_frame: true,
+                ..Self::new(text)
+            }
+        }
+
+        fn render_count(&self) -> usize {
+            *self.renders.borrow()
+        }
+
+        fn set_text(&self, text: &str) {
+            *self.text.borrow_mut() = text.to_owned();
+        }
+    }
+
+    impl Block for CountingBlock {
+        fn render(&self, _width: usize) -> Vec<Cow<'_, str>> {
+            *self.renders.borrow_mut() += 1;
+            vec![Cow::Owned(self.text.borrow().clone())]
+        }
+
+        fn render_every_frame(&self) -> bool {
+            self.every_frame
+        }
+    }
+
+    #[test]
+    fn identified_blocks_are_scoped_by_region_and_empty_ids_can_be_replaced_in_place() {
+        let mut terminal = Terminal::new(
+            RecordingBackend::default(),
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.insert_live("", NamedBlock("live first"));
+        terminal.insert_pinned("", NamedBlock("pinned"));
+        terminal.insert_live(String::from(""), NamedBlock("live second"));
+
+        assert_eq!(
+            terminal.get_live::<NamedBlock, _>("").map(|block| block.0),
+            Some("live second")
+        );
+        assert_eq!(
+            terminal
+                .get_pinned::<NamedBlock, _>("")
+                .map(|block| block.0),
+            Some("pinned")
+        );
+    }
+
+    #[test]
+    fn identified_replacement_preserves_order_and_remove_reports_whether_anything_was_removed() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("before");
+        terminal.insert_live("stream", "first");
+        terminal.push_live("after");
+        terminal.insert_live("stream", "second");
+        terminal.render().unwrap();
+
+        assert!(!terminal.remove_live("missing"));
+        let id = String::from("stream");
+        assert!(terminal.remove_live(&id));
+        terminal.render().unwrap();
+
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("before".to_owned()),
+                Operation::Newline,
+                Operation::Write("second".to_owned()),
+                Operation::Newline,
+                Operation::Write("after".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("before".to_owned()),
+                Operation::Newline,
+                Operation::Write("after".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn clear_live_and_clear_pinned_remove_region_contents_independently() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("anonymous live");
+        terminal.insert_live("live", NamedBlock("live"));
+        terminal.push_pinned("anonymous pinned");
+        terminal.insert_pinned("pinned", NamedBlock("pinned"));
+
+        terminal.clear_pinned();
+        assert!(terminal.get_pinned::<NamedBlock, _>("pinned").is_none());
+        terminal.render().unwrap();
+
+        terminal.clear_live();
+        assert!(terminal.get_live::<NamedBlock, _>("live").is_none());
+        terminal.render().unwrap();
+
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("anonymous live".to_owned()),
+                Operation::Newline,
+                Operation::Write("live".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn mutable_typed_lookup_marks_only_matching_block_dirty() {
+        let first = CountingBlock::new("first");
+        let second = CountingBlock::new("second");
+        let mut terminal = Terminal::new(
+            RecordingBackend::default(),
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.insert_live("first", first.clone());
+        terminal.insert_live("second", second.clone());
+        terminal.render().unwrap();
+        terminal.render().unwrap();
+        assert_eq!((first.render_count(), second.render_count()), (1, 1));
+
+        assert!(terminal.get_live_mut::<OtherBlock, _>("first").is_none());
+        terminal.render().unwrap();
+        assert_eq!((first.render_count(), second.render_count()), (1, 1));
+
+        terminal
+            .get_live_mut::<CountingBlock, _>("first")
+            .expect("matching mutable lookup should succeed")
+            .set_text("changed");
+        terminal.render().unwrap();
+
+        assert_eq!((first.render_count(), second.render_count()), (2, 1));
+    }
+
+    #[test]
+    fn clean_caches_are_reused_while_every_frame_blocks_render_each_attempt() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let regular = CountingBlock::new("regular");
+        let every_frame = CountingBlock::every_frame("dynamic");
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live(regular.clone());
+        terminal.push_live(every_frame.clone());
+        terminal.render().unwrap();
+        terminal.render().unwrap();
+
+        assert_eq!(regular.render_count(), 1);
+        assert_eq!(every_frame.render_count(), 2);
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("regular".to_owned()),
+                Operation::Newline,
+                Operation::Write("dynamic".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn width_changes_dirty_all_blocks_but_height_only_resize_reuses_clean_caches() {
+        let block = CountingBlock::new("sized");
+        let mut terminal = Terminal::new(
+            RecordingBackend::default(),
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live(block.clone());
+        terminal.render().unwrap();
+        assert_eq!(block.render_count(), 1);
+
+        terminal
+            .resize(TerminalSize {
+                width: 80,
+                height: 40,
+            })
+            .unwrap();
+        terminal.render().unwrap();
+        assert_eq!(block.render_count(), 1);
+
+        terminal
+            .resize(TerminalSize {
+                width: 40,
+                height: 40,
+            })
+            .unwrap();
+        terminal.render().unwrap();
+        assert_eq!(block.render_count(), 2);
     }
 
     #[test]
