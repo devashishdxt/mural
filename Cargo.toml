@@ -11,3 +11,5 @@ keywords = ["terminal", "tui", "renderer", "ansi", "conversation"]
 categories = ["command-line-interface"]
 
 [dependencies]
+thiserror = "2"
+termina = "0.3"
