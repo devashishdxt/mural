@@ -1075,10 +1075,12 @@ mod tests {
     }
 
     #[test]
-    fn width_changes_dirty_all_blocks_but_height_only_resize_reuses_clean_caches() {
-        let block = CountingBlock::new("sized");
+    fn invalid_resize_is_memory_only_and_leaves_committed_state_unchanged() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let block = CountingBlock::new("stable");
         let mut terminal = Terminal::new(
-            RecordingBackend::default(),
+            backend,
             TerminalSize {
                 width: 80,
                 height: 24,
@@ -1089,7 +1091,98 @@ mod tests {
 
         terminal.push_live(block.clone());
         terminal.render().unwrap();
+        let err = terminal
+            .resize(TerminalSize {
+                width: 0,
+                height: 40,
+            })
+            .err()
+            .expect("zero width resize should fail");
+        terminal.render().unwrap();
+
+        assert!(matches!(err, TerminalError::InvalidTerminalSize));
         assert_eq!(block.render_count(), 1);
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("stable".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn unchanged_size_resize_forces_full_redraw_without_dirtying_clean_caches() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let block = CountingBlock::new("same size");
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live(block.clone());
+        terminal.render().unwrap();
+        terminal
+            .resize(TerminalSize {
+                width: 80,
+                height: 24,
+            })
+            .unwrap();
+        terminal.render().unwrap();
+
+        assert_eq!(block.render_count(), 1);
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("same size".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("same size".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn width_changes_dirty_all_blocks_but_height_only_resize_reuses_clean_caches() {
+        let live = CountingBlock::new("live");
+        let pinned = CountingBlock::new("pinned");
+        let mut terminal = Terminal::new(
+            RecordingBackend::default(),
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live(live.clone());
+        terminal.push_pinned(pinned.clone());
+        terminal.render().unwrap();
+        assert_eq!((live.render_count(), pinned.render_count()), (1, 1));
 
         terminal
             .resize(TerminalSize {
@@ -1098,7 +1191,7 @@ mod tests {
             })
             .unwrap();
         terminal.render().unwrap();
-        assert_eq!(block.render_count(), 1);
+        assert_eq!((live.render_count(), pinned.render_count()), (1, 1));
 
         terminal
             .resize(TerminalSize {
@@ -1107,7 +1200,181 @@ mod tests {
             })
             .unwrap();
         terminal.render().unwrap();
+        assert_eq!((live.render_count(), pinned.render_count()), (2, 2));
+    }
+
+    #[test]
+    fn resize_after_finish_start_or_completion_does_not_write_or_reopen_rendering() {
+        let backend = FailOnSecondFlushBackend::default();
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("partial finish");
+        assert!(terminal.finish().is_err());
+        let before_resize = operations.operations();
+        terminal
+            .resize(TerminalSize {
+                width: 40,
+                height: 12,
+            })
+            .unwrap();
+        let err = terminal
+            .render()
+            .err()
+            .expect("render should stay rejected");
+
+        assert_eq!(operations.operations(), before_resize);
+        assert!(matches!(
+            err,
+            TerminalError::Lifecycle(LifecycleError::RenderAfterFinishStarted)
+        ));
+
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.finish().unwrap();
+        let before_resize = operations.operations();
+        terminal
+            .resize(TerminalSize {
+                width: 100,
+                height: 30,
+            })
+            .unwrap();
+        let render_err = terminal
+            .render()
+            .err()
+            .expect("render should stay rejected");
+        let finish_err = terminal
+            .finish()
+            .err()
+            .expect("finish should stay completed");
+
+        assert_eq!(operations.operations(), before_resize);
+        assert!(matches!(
+            render_err,
+            TerminalError::Lifecycle(LifecycleError::RenderAfterFinishStarted)
+        ));
+        assert!(matches!(
+            finish_err,
+            TerminalError::Lifecycle(LifecycleError::AlreadyFinished)
+        ));
+    }
+
+    #[test]
+    fn force_full_redraw_is_memory_only_and_preserves_cache_dirty_state() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let block = CountingBlock::new("clean");
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.insert_live("status", block.clone());
+        terminal.render().unwrap();
+        let before_force = operations.operations();
+        terminal.force_full_redraw();
+        assert_eq!(operations.operations(), before_force);
+        terminal.render().unwrap();
+        assert_eq!(block.render_count(), 1);
+
+        terminal
+            .get_live_mut::<CountingBlock, _>("status")
+            .expect("status block should be present")
+            .set_text("dirty");
+        terminal.force_full_redraw();
+        terminal.render().unwrap();
+
         assert_eq!(block.render_count(), 2);
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("clean".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("clean".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("dirty".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn force_full_redraw_before_finish_renders_live_frame_before_cursor_restore() {
+        let backend = RecordingBackend::default();
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("durable");
+        terminal.render().unwrap();
+        terminal.force_full_redraw();
+        terminal.finish().unwrap();
+
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("durable".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("durable".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ShowCursor,
+                Operation::Flush,
+            ]
+        );
     }
 
     #[test]
