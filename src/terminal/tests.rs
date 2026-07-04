@@ -234,6 +234,152 @@ fn changed_line_render_patches_row_and_restores_cursor_to_sentinel() {
 }
 
 #[test]
+fn pure_append_writes_at_sentinel_without_clearing_and_tracks_scrolled_sentinel() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 2,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.push_live("committed one");
+    terminal.push_live("committed two");
+    terminal.render().unwrap();
+    terminal.push_live("appended three");
+    terminal.push_live("appended four");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations(),
+        vec![
+            Operation::HideCursor,
+            Operation::Flush,
+            Operation::Write("committed one".to_owned()),
+            Operation::Newline,
+            Operation::Write("committed two".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+            Operation::Write("appended three".to_owned()),
+            Operation::Newline,
+            Operation::Write("appended four".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+        ]
+    );
+    assert_eq!(terminal.last_committed_frame.sentinel_row, 4);
+}
+
+#[test]
+fn changed_line_plus_trailing_append_appends_before_patching_old_coordinate() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let status = CountingBlock::new("old");
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 24,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("status", status.clone());
+    terminal.push_live("stable");
+    terminal.render().unwrap();
+    terminal
+        .get_live_mut::<CountingBlock, _>("status")
+        .expect("status block should exist")
+        .set_text("new");
+    terminal.push_live("tail");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations(),
+        vec![
+            Operation::HideCursor,
+            Operation::Flush,
+            Operation::Write("old".to_owned()),
+            Operation::Newline,
+            Operation::Write("stable".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+            Operation::Write("tail".to_owned()),
+            Operation::Newline,
+            Operation::MoveUp(3),
+            Operation::CarriageReturn,
+            Operation::ClearLine,
+            Operation::Write("new".to_owned()),
+            Operation::CarriageReturn,
+            Operation::MoveDown(3),
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn append_induced_scroll_hiding_remaining_patch_falls_back_to_full_redraw() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let middle = CountingBlock::new("old middle");
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 3,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.push_live("top");
+    terminal.insert_live("middle", middle.clone());
+    terminal.push_live("bottom");
+    terminal.render().unwrap();
+    terminal
+        .get_live_mut::<CountingBlock, _>("middle")
+        .expect("middle block should exist")
+        .set_text("new middle");
+    terminal.push_live("tail one");
+    terminal.push_live("tail two");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations(),
+        vec![
+            Operation::HideCursor,
+            Operation::Flush,
+            Operation::Write("top".to_owned()),
+            Operation::Newline,
+            Operation::Write("old middle".to_owned()),
+            Operation::Newline,
+            Operation::Write("bottom".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+            Operation::ClearScreen,
+            Operation::PurgeScrollback,
+            Operation::MoveToTopLeft,
+            Operation::Write("top".to_owned()),
+            Operation::Newline,
+            Operation::Write("new middle".to_owned()),
+            Operation::Newline,
+            Operation::Write("bottom".to_owned()),
+            Operation::Newline,
+            Operation::Write("tail one".to_owned()),
+            Operation::Newline,
+            Operation::Write("tail two".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
 fn shorter_changed_line_is_cleared_before_replacement_text() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();

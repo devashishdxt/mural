@@ -12,6 +12,7 @@ pub(super) enum PlannedOperation<'a> {
     CarriageReturn,
     ClearLine,
     Write(&'a str),
+    Newline,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -59,6 +60,29 @@ pub(super) fn plan_frame_render<'a>(
     }
 
     let patches = translate_diff_to_patches(&patience_diff(&last_frame.lines, current_frame));
+    if let Some((append_range, remaining_patches)) = extract_trailing_append(
+        patches.as_slice(),
+        last_frame.lines.len(),
+        current_frame.len(),
+    ) {
+        let simulated_sentinel_row = last_frame.sentinel_row + append_range.len();
+        let first_visible_row = first_visible_row(simulated_sentinel_row, height);
+        if remaining_patches.iter().any(|patch| match patch {
+            DocumentPatch::ChangedLine { old_row, .. } => *old_row < first_visible_row,
+            DocumentPatch::InsertLines { .. } | DocumentPatch::DeleteLines { .. } => true,
+        }) {
+            return FramePlan::FullRedraw;
+        }
+
+        let mut operations = plan_append_operations(&current_frame[append_range]);
+        operations.extend(plan_changed_line_operations(
+            simulated_sentinel_row,
+            remaining_patches,
+            current_frame,
+        ));
+        return FramePlan::ChangedLines(operations);
+    }
+
     if patches
         .iter()
         .any(|patch| !matches!(patch, DocumentPatch::ChangedLine { .. }))
@@ -92,6 +116,7 @@ fn render_planned_operations<B: Backend>(
             PlannedOperation::CarriageReturn => backend.carriage_return()?,
             PlannedOperation::ClearLine => backend.clear_line()?,
             PlannedOperation::Write(line) => backend.write_str(line)?,
+            PlannedOperation::Newline => backend.newline()?,
         }
     }
 
@@ -100,6 +125,34 @@ fn render_planned_operations<B: Backend>(
 
 fn first_visible_row(sentinel_row: usize, height: usize) -> usize {
     sentinel_row.saturating_sub(height.saturating_sub(1))
+}
+
+fn plan_append_operations(lines: &[String]) -> Vec<PlannedOperation<'_>> {
+    lines
+        .iter()
+        .flat_map(|line| {
+            [
+                PlannedOperation::Write(line.as_str()),
+                PlannedOperation::Newline,
+            ]
+        })
+        .collect()
+}
+
+fn extract_trailing_append(
+    patches: &[DocumentPatch],
+    old_len: usize,
+    current_len: usize,
+) -> Option<(std::ops::Range<usize>, Vec<DocumentPatch>)> {
+    let (last_patch, remaining_patches) = patches.split_last()?;
+    let DocumentPatch::InsertLines { old_row, current } = last_patch else {
+        return None;
+    };
+    if *old_row != old_len || current.end != current_len {
+        return None;
+    }
+
+    Some((current.clone(), remaining_patches.to_vec()))
 }
 
 fn plan_changed_line_operations<'a>(

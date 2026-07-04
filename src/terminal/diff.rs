@@ -14,7 +14,7 @@ pub(super) enum DiffOp {
     },
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum DocumentPatch {
     ChangedLine {
         old_row: usize,
