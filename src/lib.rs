@@ -3,6 +3,8 @@ mod block;
 mod error;
 mod region;
 mod terminal;
+#[cfg(test)]
+mod test_utils;
 mod types;
 
 pub use backend::{Backend, TerminaBackend};

@@ -1,5 +1,3 @@
-#[cfg(test)]
-pub(crate) mod recording;
 mod termina;
 
 pub use termina::TerminaBackend;

@@ -1,6 +1,6 @@
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
-use super::Backend;
+use crate::Backend;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Operation {
