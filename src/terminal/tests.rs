@@ -403,6 +403,136 @@ fn insert_that_would_discard_sentinel_falls_back_to_full_redraw() {
 }
 
 #[test]
+fn visible_middle_delete_uses_delete_lines_without_redrawing_shifted_rows() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["top", "removed", "bottom"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 6,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["top", "bottom"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations()[9..],
+        [
+            Operation::MoveUp(2),
+            Operation::CarriageReturn,
+            Operation::DeleteLines(1),
+            Operation::MoveDown(1),
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn tail_delete_clears_exposed_rows_with_delete_lines_and_restores_sentinel() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["head", "tail one", "tail two"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 6,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["head"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations()[9..],
+        [
+            Operation::MoveUp(2),
+            Operation::CarriageReturn,
+            Operation::DeleteLines(2),
+            Operation::Flush,
+        ]
+    );
+    assert_eq!(
+        terminal.last_committed_frame,
+        CommittedFrame {
+            lines: vec!["head".to_owned()],
+            sentinel_row: 1,
+        }
+    );
+}
+
+#[test]
+fn multi_line_middle_delete_preserves_shifted_suffix_without_redrawing_it() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["top", "removed one", "removed two", "bottom"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 6,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["top", "bottom"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations()[11..],
+        [
+            Operation::MoveUp(3),
+            Operation::CarriageReturn,
+            Operation::DeleteLines(2),
+            Operation::MoveDown(1),
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn delete_target_above_visible_viewport_falls_back_to_full_redraw() {
+    let last_frame = CommittedFrame {
+        lines: ["zero", "one", "two", "three"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        sentinel_row: 4,
+    };
+    let current_frame = ["zero", "two", "three"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 3, false);
+
+    assert_eq!(plan, FramePlan::FullRedraw);
+}
+
+#[test]
 fn insert_target_above_visible_viewport_falls_back_to_full_redraw() {
     let last_frame = CommittedFrame {
         lines: ["zero", "one", "two", "three"]
@@ -1145,13 +1275,10 @@ fn identified_replacement_preserves_order_and_remove_reports_whether_anything_wa
             Operation::Write("after".to_owned()),
             Operation::Newline,
             Operation::Flush,
-            Operation::ClearScreen,
-            Operation::PurgeScrollback,
-            Operation::MoveToTopLeft,
-            Operation::Write("before".to_owned()),
-            Operation::Newline,
-            Operation::Write("after".to_owned()),
-            Operation::Newline,
+            Operation::MoveUp(2),
+            Operation::CarriageReturn,
+            Operation::DeleteLines(1),
+            Operation::MoveDown(1),
             Operation::Flush,
         ]
     );
@@ -1194,9 +1321,9 @@ fn clear_live_and_clear_pinned_remove_region_contents_independently() {
             Operation::Write("live".to_owned()),
             Operation::Newline,
             Operation::Flush,
-            Operation::ClearScreen,
-            Operation::PurgeScrollback,
-            Operation::MoveToTopLeft,
+            Operation::MoveUp(2),
+            Operation::CarriageReturn,
+            Operation::DeleteLines(2),
             Operation::Flush,
         ]
     );
@@ -1887,11 +2014,9 @@ fn finish_preserves_pinned_cache_without_rendering_it() {
             Operation::Write("pinned".to_owned()),
             Operation::Newline,
             Operation::Flush,
-            Operation::ClearScreen,
-            Operation::PurgeScrollback,
-            Operation::MoveToTopLeft,
-            Operation::Write("live".to_owned()),
-            Operation::Newline,
+            Operation::MoveUp(1),
+            Operation::CarriageReturn,
+            Operation::DeleteLines(1),
             Operation::Flush,
             Operation::ShowCursor,
             Operation::Flush,
