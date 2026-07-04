@@ -524,6 +524,137 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct FailOnArmedOperationBackend {
+        operations: Rc<RefCell<Vec<Operation>>>,
+        successful_operations_before_failure: Rc<RefCell<Option<usize>>>,
+    }
+
+    impl FailOnArmedOperationBackend {
+        fn fail_next_operation(&self) {
+            self.fail_after_successful_operations(0);
+        }
+
+        fn fail_after_successful_operations(&self, count: usize) {
+            *self.successful_operations_before_failure.borrow_mut() = Some(count);
+        }
+
+        fn operations(&self) -> Vec<Operation> {
+            self.operations.borrow().clone()
+        }
+
+        fn record(&mut self, operation: Operation) -> Result<(), OperationFailed> {
+            self.operations.borrow_mut().push(operation);
+            let mut remaining = self.successful_operations_before_failure.borrow_mut();
+            let Some(count) = remaining.as_mut() else {
+                return Ok(());
+            };
+
+            if *count == 0 {
+                *remaining = None;
+                return Err(OperationFailed);
+            }
+
+            *count -= 1;
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct OperationFailed;
+
+    impl fmt::Display for OperationFailed {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("operation failed")
+        }
+    }
+
+    impl Error for OperationFailed {}
+
+    impl Backend for FailOnArmedOperationBackend {
+        type Error = OperationFailed;
+
+        fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+            self.record(Operation::HideCursor)
+        }
+
+        fn show_cursor(&mut self) -> Result<(), Self::Error> {
+            self.record(Operation::ShowCursor)
+        }
+
+        fn carriage_return(&mut self) -> Result<(), Self::Error> {
+            self.record(Operation::CarriageReturn)
+        }
+
+        fn newline(&mut self) -> Result<(), Self::Error> {
+            self.record(Operation::Newline)
+        }
+
+        fn move_up(&mut self, n: usize) -> Result<(), Self::Error> {
+            if n == 0 {
+                Ok(())
+            } else {
+                self.record(Operation::MoveUp(n))
+            }
+        }
+
+        fn move_down(&mut self, n: usize) -> Result<(), Self::Error> {
+            if n == 0 {
+                Ok(())
+            } else {
+                self.record(Operation::MoveDown(n))
+            }
+        }
+
+        fn move_to_top_left(&mut self) -> Result<(), Self::Error> {
+            self.record(Operation::MoveToTopLeft)
+        }
+
+        fn clear_line(&mut self) -> Result<(), Self::Error> {
+            self.record(Operation::ClearLine)
+        }
+
+        fn clear_screen(&mut self) -> Result<(), Self::Error> {
+            self.record(Operation::ClearScreen)
+        }
+
+        fn purge_scrollback(&mut self) -> Result<(), Self::Error> {
+            self.record(Operation::PurgeScrollback)
+        }
+
+        fn insert_lines(&mut self, n: usize) -> Result<(), Self::Error> {
+            if n == 0 {
+                Ok(())
+            } else {
+                self.record(Operation::InsertLines(n))
+            }
+        }
+
+        fn delete_lines(&mut self, n: usize) -> Result<(), Self::Error> {
+            if n == 0 {
+                Ok(())
+            } else {
+                self.record(Operation::DeleteLines(n))
+            }
+        }
+
+        fn scroll_up(&mut self, n: usize) -> Result<(), Self::Error> {
+            if n == 0 {
+                Ok(())
+            } else {
+                self.record(Operation::ScrollUp(n))
+            }
+        }
+
+        fn write_str(&mut self, text: &str) -> Result<(), Self::Error> {
+            self.record(Operation::Write(text.to_owned()))
+        }
+
+        fn flush(&mut self) -> Result<(), Self::Error> {
+            self.record(Operation::Flush)
+        }
+    }
+
     #[test]
     fn terminal_rejects_zero_sized_dimensions() {
         let err = Terminal::new(
@@ -856,6 +987,63 @@ mod tests {
         );
     }
 
+    #[test]
+    fn backend_operation_failure_during_render_preserves_frame_and_repairs_with_full_redraw() {
+        let backend = FailOnArmedOperationBackend::default();
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("committed");
+        terminal.render().unwrap();
+        terminal.push_live("uncommitted");
+        operations.fail_next_operation();
+
+        let err = terminal
+            .render()
+            .err()
+            .expect("backend operation failure should be reported");
+
+        assert!(matches!(err, TerminalError::Backend(OperationFailed)));
+        assert_eq!(
+            terminal.last_committed_frame,
+            CommittedFrame {
+                lines: vec!["committed".to_owned()],
+                sentinel_row: 1,
+            }
+        );
+        assert!(terminal.needs_full_redraw);
+
+        terminal.render().unwrap();
+
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::Write("committed".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::Write("uncommitted".to_owned()),
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("committed".to_owned()),
+                Operation::Newline,
+                Operation::Write("uncommitted".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+            ]
+        );
+    }
+
     #[derive(Debug, Eq, PartialEq)]
     struct NamedBlock(&'static str);
 
@@ -914,6 +1102,121 @@ mod tests {
         fn render_every_frame(&self) -> bool {
             self.every_frame
         }
+    }
+
+    #[test]
+    fn selected_full_redraw_operation_failures_are_transactional() {
+        let selected_failures = [
+            (0, Operation::ClearScreen),
+            (1, Operation::PurgeScrollback),
+            (2, Operation::MoveToTopLeft),
+            (3, Operation::Write("new".to_owned())),
+            (4, Operation::Newline),
+        ];
+
+        for (successful_operations_before_failure, failed_operation) in selected_failures {
+            let backend = FailOnArmedOperationBackend::default();
+            let operations = backend.clone();
+            let block = CountingBlock::new("old");
+            let mut terminal = Terminal::new(
+                backend,
+                TerminalSize {
+                    width: 80,
+                    height: 24,
+                },
+                CursorPosition { row: 0, column: 0 },
+            )
+            .unwrap();
+
+            terminal.insert_live("status", block.clone());
+            terminal.render().unwrap();
+            terminal
+                .get_live_mut::<CountingBlock, _>("status")
+                .expect("status block should exist")
+                .set_text("new");
+            let operations_before_failure = operations.operations().len();
+            operations.fail_after_successful_operations(successful_operations_before_failure);
+
+            let err = terminal
+                .render()
+                .err()
+                .expect("selected backend operation should fail");
+
+            assert!(matches!(err, TerminalError::Backend(OperationFailed)));
+            assert_eq!(
+                operations.operations()
+                    [operations_before_failure + successful_operations_before_failure],
+                failed_operation
+            );
+            assert_eq!(
+                terminal.last_committed_frame,
+                CommittedFrame {
+                    lines: vec!["old".to_owned()],
+                    sentinel_row: 1,
+                }
+            );
+            assert!(terminal.needs_full_redraw);
+
+            terminal.render().unwrap();
+
+            assert_eq!(
+                terminal.last_committed_frame,
+                CommittedFrame {
+                    lines: vec!["new".to_owned()],
+                    sentinel_row: 1,
+                }
+            );
+            assert!(!terminal.needs_full_redraw);
+        }
+    }
+
+    #[test]
+    fn failed_render_preserves_dirty_state_until_successful_repair() {
+        let backend = FailOnArmedOperationBackend::default();
+        let operations = backend.clone();
+        let block = CountingBlock::new("clean");
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.insert_live("status", block.clone());
+        terminal.render().unwrap();
+        terminal
+            .get_live_mut::<CountingBlock, _>("status")
+            .expect("status block should exist")
+            .set_text("dirty");
+        operations.fail_next_operation();
+
+        assert!(terminal.render().is_err());
+        assert_eq!(block.render_count(), 2);
+        assert!(terminal.needs_full_redraw);
+
+        terminal.render().unwrap();
+
+        assert_eq!(block.render_count(), 3);
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::Write("clean".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ClearScreen,
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("dirty".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+            ]
+        );
     }
 
     #[test]
@@ -1392,6 +1695,72 @@ mod tests {
                 Operation::PurgeScrollback,
                 Operation::MoveToTopLeft,
                 Operation::Write("durable".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::ShowCursor,
+                Operation::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn backend_operation_failure_during_finish_preserves_retry_state_and_repairs() {
+        let backend = FailOnArmedOperationBackend::default();
+        let operations = backend.clone();
+        let mut terminal = Terminal::new(
+            backend,
+            TerminalSize {
+                width: 80,
+                height: 24,
+            },
+            CursorPosition { row: 0, column: 0 },
+        )
+        .unwrap();
+
+        terminal.push_live("committed");
+        terminal.render().unwrap();
+        terminal.push_live("failed final");
+        operations.fail_next_operation();
+
+        let err = terminal
+            .finish()
+            .err()
+            .expect("backend operation failure should be reported");
+
+        assert!(matches!(err, TerminalError::Backend(OperationFailed)));
+        assert_eq!(
+            terminal.lifecycle,
+            Lifecycle::Finishing {
+                final_render_complete: false,
+            }
+        );
+        assert_eq!(
+            terminal.last_committed_frame,
+            CommittedFrame {
+                lines: vec!["committed".to_owned()],
+                sentinel_row: 1,
+            }
+        );
+        assert!(terminal.needs_full_redraw);
+
+        terminal.clear_live();
+        terminal.push_live("repaired final");
+        terminal.finish().unwrap();
+
+        assert_eq!(terminal.lifecycle, Lifecycle::Finished);
+        assert_eq!(
+            operations.operations(),
+            vec![
+                Operation::HideCursor,
+                Operation::Flush,
+                Operation::Write("committed".to_owned()),
+                Operation::Newline,
+                Operation::Flush,
+                Operation::Write("failed final".to_owned()),
+                Operation::ClearScreen,
+                Operation::PurgeScrollback,
+                Operation::MoveToTopLeft,
+                Operation::Write("repaired final".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
                 Operation::ShowCursor,
