@@ -6,7 +6,7 @@ use super::{
     rendering::{FramePlan, PlannedOperation, plan_frame_render},
     *,
 };
-use crate::test_utils::*;
+use crate::{Block, test_utils::*};
 
 #[test]
 fn terminal_rejects_zero_sized_dimensions() {
@@ -231,6 +231,194 @@ fn changed_line_render_patches_row_and_restores_cursor_to_sentinel() {
             Operation::Flush,
         ]
     );
+}
+
+#[test]
+fn visible_middle_insert_uses_insert_lines_without_redrawing_shifted_rows() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["top", "bottom"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 6,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["top", "inserted", "bottom"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations(),
+        vec![
+            Operation::HideCursor,
+            Operation::Flush,
+            Operation::Write("top".to_owned()),
+            Operation::Newline,
+            Operation::Write("bottom".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+            Operation::MoveUp(1),
+            Operation::CarriageReturn,
+            Operation::InsertLines(1),
+            Operation::ClearLine,
+            Operation::Write("inserted".to_owned()),
+            Operation::CarriageReturn,
+            Operation::MoveDown(2),
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn top_boundary_insert_preserves_shifted_rows_and_restores_sentinel() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["bottom"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 4,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["top", "bottom"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations(),
+        vec![
+            Operation::HideCursor,
+            Operation::Flush,
+            Operation::Write("bottom".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+            Operation::MoveUp(1),
+            Operation::CarriageReturn,
+            Operation::InsertLines(1),
+            Operation::ClearLine,
+            Operation::Write("top".to_owned()),
+            Operation::CarriageReturn,
+            Operation::MoveDown(2),
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn multi_line_insert_clears_each_inserted_row_and_restores_sentinel() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["head", "tail"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 6,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["head", "one", "two", "tail"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations()[7..],
+        [
+            Operation::MoveUp(1),
+            Operation::CarriageReturn,
+            Operation::InsertLines(2),
+            Operation::ClearLine,
+            Operation::Write("one".to_owned()),
+            Operation::Newline,
+            Operation::ClearLine,
+            Operation::Write("two".to_owned()),
+            Operation::CarriageReturn,
+            Operation::MoveDown(2),
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn insert_that_would_discard_sentinel_falls_back_to_full_redraw() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["top", "bottom"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 3,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["top", "inserted", "bottom"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations()[7..],
+        [
+            Operation::ClearScreen,
+            Operation::PurgeScrollback,
+            Operation::MoveToTopLeft,
+            Operation::Write("top".to_owned()),
+            Operation::Newline,
+            Operation::Write("inserted".to_owned()),
+            Operation::Newline,
+            Operation::Write("bottom".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn insert_target_above_visible_viewport_falls_back_to_full_redraw() {
+    let last_frame = CommittedFrame {
+        lines: ["zero", "one", "two", "three"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        sentinel_row: 4,
+    };
+    let current_frame = ["zero", "inserted", "one", "two", "three"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 3, false);
+
+    assert_eq!(plan, FramePlan::FullRedraw);
 }
 
 #[test]

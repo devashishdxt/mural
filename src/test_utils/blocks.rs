@@ -20,6 +20,36 @@ impl Block for WidthRecordingBlock {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct LinesBlock {
+    lines: Rc<RefCell<Vec<String>>>,
+}
+
+impl LinesBlock {
+    pub(crate) fn new(lines: &[&str]) -> Self {
+        Self {
+            lines: Rc::new(RefCell::new(
+                lines.iter().map(|line| line.to_string()).collect(),
+            )),
+        }
+    }
+
+    pub(crate) fn set_lines(&self, lines: &[&str]) {
+        *self.lines.borrow_mut() = lines.iter().map(|line| line.to_string()).collect();
+    }
+}
+
+impl Block for LinesBlock {
+    fn render(&self, _width: usize) -> Vec<Cow<'_, str>> {
+        self.lines
+            .borrow()
+            .iter()
+            .cloned()
+            .map(Cow::Owned)
+            .collect()
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct NamedBlock(pub(crate) &'static str);
 

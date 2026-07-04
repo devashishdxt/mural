@@ -11,6 +11,7 @@ pub(super) enum PlannedOperation<'a> {
     MoveDown(usize),
     CarriageReturn,
     ClearLine,
+    InsertLines(usize),
     Write(&'a str),
     Newline,
 }
@@ -83,6 +84,15 @@ pub(super) fn plan_frame_render<'a>(
         return FramePlan::ChangedLines(operations);
     }
 
+    if let Some(operations) = plan_insert_line_operations(
+        last_frame.sentinel_row,
+        current_frame,
+        height,
+        patches.as_slice(),
+    ) {
+        return FramePlan::ChangedLines(operations);
+    }
+
     if patches
         .iter()
         .any(|patch| !matches!(patch, DocumentPatch::ChangedLine { .. }))
@@ -115,6 +125,7 @@ fn render_planned_operations<B: Backend>(
             PlannedOperation::MoveDown(count) => backend.move_down(*count)?,
             PlannedOperation::CarriageReturn => backend.carriage_return()?,
             PlannedOperation::ClearLine => backend.clear_line()?,
+            PlannedOperation::InsertLines(count) => backend.insert_lines(*count)?,
             PlannedOperation::Write(line) => backend.write_str(line)?,
             PlannedOperation::Newline => backend.newline()?,
         }
@@ -153,6 +164,36 @@ fn extract_trailing_append(
     }
 
     Some((current.clone(), remaining_patches.to_vec()))
+}
+
+fn plan_insert_line_operations<'a>(
+    sentinel_row: usize,
+    current_frame: &'a [String],
+    height: usize,
+    patches: &[DocumentPatch],
+) -> Option<Vec<PlannedOperation<'a>>> {
+    let [DocumentPatch::InsertLines { old_row, current }] = patches else {
+        return None;
+    };
+    if current_frame.len() >= height || *old_row < first_visible_row(sentinel_row, height) {
+        return None;
+    }
+
+    let inserted_count = current.len();
+    let mut operations = Vec::new();
+    operations.push(PlannedOperation::MoveUp(sentinel_row - old_row));
+    operations.push(PlannedOperation::CarriageReturn);
+    operations.push(PlannedOperation::InsertLines(inserted_count));
+    for (offset, current_row) in current.clone().enumerate() {
+        if offset > 0 {
+            operations.push(PlannedOperation::Newline);
+        }
+        operations.push(PlannedOperation::ClearLine);
+        operations.push(PlannedOperation::Write(current_frame[current_row].as_str()));
+    }
+    operations.push(PlannedOperation::CarriageReturn);
+    operations.push(PlannedOperation::MoveDown(sentinel_row - old_row + 1));
+    Some(operations)
 }
 
 fn plan_changed_line_operations<'a>(
