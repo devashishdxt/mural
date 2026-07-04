@@ -17,7 +17,8 @@ pub struct Terminal<B: Backend> {
     lifecycle: Lifecycle,
     live_blocks: Region,
     pinned_blocks: Region,
-    last_committed_frame: Option<CommittedFrame>,
+    last_committed_frame: CommittedFrame,
+    needs_full_redraw: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,7 +47,11 @@ impl<B: Backend> Terminal<B> {
             lifecycle: Lifecycle::Running,
             live_blocks: Region::default(),
             pinned_blocks: Region::default(),
-            last_committed_frame: None,
+            last_committed_frame: CommittedFrame {
+                lines: Vec::new(),
+                sentinel_row: 0,
+            },
+            needs_full_redraw: false,
         })
     }
 
@@ -141,12 +146,12 @@ impl<B: Backend> Terminal<B> {
             self.pinned_blocks.mark_all_dirty();
         }
         self.size = size;
-        self.last_committed_frame = None;
+        self.needs_full_redraw = true;
         Ok(())
     }
 
     pub fn force_full_redraw(&mut self) {
-        self.last_committed_frame = None;
+        self.needs_full_redraw = true;
     }
 
     pub fn render(&mut self) -> Result<(), TerminalError<B::Error>> {
@@ -161,16 +166,25 @@ impl<B: Backend> Terminal<B> {
             &mut self.pinned_blocks,
             self.size.width.saturating_sub(1),
         );
-        if frame_changed(self.last_committed_frame.as_ref(), &frame) {
-            render_full_frame(&mut self.backend, &frame)?;
+
+        if let Err(err) = render_frame_transaction(
+            &mut self.backend,
+            &self.last_committed_frame.lines,
+            &frame,
+            self.needs_full_redraw,
+        ) {
+            self.needs_full_redraw = true;
+            return Err(err);
         }
-        self.backend.flush()?;
+
+        let sentinel_row = frame.len();
         self.live_blocks.mark_all_clean();
         self.pinned_blocks.mark_all_clean();
-        self.last_committed_frame = Some(CommittedFrame {
-            lines: frame.clone(),
-            sentinel_row: frame.len(),
-        });
+        self.last_committed_frame = CommittedFrame {
+            lines: frame,
+            sentinel_row,
+        };
+        self.needs_full_redraw = false;
         Ok(())
     }
 
@@ -196,15 +210,24 @@ impl<B: Backend> Terminal<B> {
             let frame = self
                 .live_blocks
                 .render_lines(self.size.width.saturating_sub(1));
-            if frame_changed(self.last_committed_frame.as_ref(), &frame) {
-                render_full_frame(&mut self.backend, &frame)?;
+
+            if let Err(err) = render_frame_transaction(
+                &mut self.backend,
+                &self.last_committed_frame.lines,
+                &frame,
+                self.needs_full_redraw,
+            ) {
+                self.needs_full_redraw = true;
+                return Err(err);
             }
-            self.backend.flush()?;
+
+            let sentinel_row = frame.len();
             self.live_blocks.mark_all_clean();
-            self.last_committed_frame = Some(CommittedFrame {
-                lines: frame.clone(),
-                sentinel_row: frame.len(),
-            });
+            self.last_committed_frame = CommittedFrame {
+                lines: frame,
+                sentinel_row,
+            };
+            self.needs_full_redraw = false;
             self.lifecycle = Lifecycle::Finishing {
                 final_render_complete: true,
             };
@@ -227,17 +250,50 @@ fn current_frame(
     lines
 }
 
-fn frame_changed(last_frame: Option<&CommittedFrame>, current_frame: &[String]) -> bool {
-    let Some(last_frame) = last_frame else {
-        return true;
-    };
-
-    last_frame.lines.len() != current_frame.len()
+fn frame_changed(last_frame: &[String], current_frame: &[String]) -> bool {
+    last_frame.len() != current_frame.len()
         || last_frame
-            .lines
             .iter()
             .zip(current_frame)
             .any(|(last, current)| last != current)
+}
+
+fn is_append_only(last_frame: &[String], current_frame: &[String]) -> bool {
+    current_frame.len() > last_frame.len()
+        && current_frame
+            .iter()
+            .zip(last_frame)
+            .all(|(current, last)| current == last)
+}
+
+fn render_frame_transaction<B: Backend>(
+    backend: &mut B,
+    last_frame: &[String],
+    current_frame: &[String],
+    needs_full_redraw: bool,
+) -> Result<(), TerminalError<B::Error>> {
+    if needs_full_redraw {
+        render_full_frame(backend, current_frame)?;
+    } else if is_append_only(last_frame, current_frame) {
+        render_appended_lines(backend, &current_frame[last_frame.len()..])?;
+    } else if frame_changed(last_frame, current_frame) {
+        render_full_frame(backend, current_frame)?;
+    }
+
+    backend.flush()?;
+    Ok(())
+}
+
+fn render_appended_lines<B: Backend>(
+    backend: &mut B,
+    lines: &[String],
+) -> Result<(), TerminalError<B::Error>> {
+    for line in lines {
+        backend.write_str(line)?;
+        backend.newline()?;
+    }
+
+    Ok(())
 }
 
 fn render_full_frame<B: Backend>(
@@ -611,9 +667,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("live".to_owned()),
                 Operation::Newline,
                 Operation::Write("pinned".to_owned()),
@@ -645,9 +698,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("hello".to_owned()),
                 Operation::Newline,
                 Operation::Write("world".to_owned()),
@@ -680,9 +730,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("same".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
@@ -732,21 +779,14 @@ mod tests {
 
         assert_eq!(
             operations.operations(),
-            vec![
-                Operation::HideCursor,
-                Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
-                Operation::Flush,
-            ]
+            vec![Operation::HideCursor, Operation::Flush, Operation::Flush]
         );
         assert_eq!(
             terminal.last_committed_frame,
-            Some(CommittedFrame {
+            CommittedFrame {
                 lines: Vec::new(),
                 sentinel_row: 0,
-            })
+            }
         );
     }
 
@@ -787,7 +827,14 @@ mod tests {
 
         terminal.push_live("retry");
         assert!(terminal.render().is_err());
-        assert_eq!(terminal.last_committed_frame, None);
+        assert_eq!(
+            terminal.last_committed_frame,
+            CommittedFrame {
+                lines: Vec::new(),
+                sentinel_row: 0,
+            }
+        );
+        assert!(terminal.needs_full_redraw);
 
         terminal.render().unwrap();
 
@@ -796,9 +843,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("retry".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
@@ -930,9 +974,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("before".to_owned()),
                 Operation::Newline,
                 Operation::Write("second".to_owned()),
@@ -984,9 +1025,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("anonymous live".to_owned()),
                 Operation::Newline,
                 Operation::Write("live".to_owned()),
@@ -1061,9 +1099,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("regular".to_owned()),
                 Operation::Newline,
                 Operation::Write("dynamic".to_owned()),
@@ -1107,9 +1142,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("stable".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
@@ -1149,9 +1181,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("same size".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
@@ -1313,9 +1342,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("clean".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
@@ -1359,9 +1385,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("durable".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
@@ -1401,9 +1424,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("final live".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
@@ -1462,9 +1482,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("first".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
@@ -1506,9 +1523,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("already rendered".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
@@ -1563,9 +1577,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Flush,
                 Operation::ShowCursor,
                 Operation::Flush,
@@ -1603,9 +1614,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("done".to_owned()),
                 Operation::Newline,
                 Operation::Flush,
@@ -1644,9 +1652,6 @@ mod tests {
             vec![
                 Operation::HideCursor,
                 Operation::Flush,
-                Operation::ClearScreen,
-                Operation::PurgeScrollback,
-                Operation::MoveToTopLeft,
                 Operation::Write("live".to_owned()),
                 Operation::Newline,
                 Operation::Write("pinned".to_owned()),
