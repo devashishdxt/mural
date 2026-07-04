@@ -2,11 +2,25 @@ use std::borrow::Cow;
 
 use super::{
     diff::{DiffOp, DocumentPatch, patience_diff, translate_diff_to_patches},
-    frame::CommittedFrame,
+    frame::{CommittedFrame, ViewportState},
     rendering::{FramePlan, PlannedOperation, plan_frame_render},
     *,
 };
 use crate::{Block, test_utils::*};
+
+fn committed_frame(
+    lines: Vec<String>,
+    first_visible_managed_row: isize,
+    cursor_managed_row: usize,
+) -> CommittedFrame {
+    CommittedFrame {
+        lines,
+        viewport: ViewportState {
+            first_visible_managed_row,
+            cursor_managed_row,
+        },
+    }
+}
 
 #[test]
 fn terminal_rejects_zero_sized_dimensions() {
@@ -228,6 +242,146 @@ fn changed_line_render_patches_row_and_restores_cursor_to_sentinel() {
             Operation::Write("new".to_owned()),
             Operation::CarriageReturn,
             Operation::MoveDown(1),
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn viewport_tracks_initial_unmanaged_rows_and_append_scrolling() {
+    let mut terminal = Terminal::new(
+        RecordingBackend::default(),
+        TerminalSize {
+            width: 80,
+            height: 4,
+        },
+        CursorPosition { row: 2, column: 0 },
+    )
+    .unwrap();
+
+    terminal.push_live("bottom");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        terminal.last_committed_frame.viewport,
+        ViewportState {
+            first_visible_managed_row: -2,
+            cursor_managed_row: 1,
+        }
+    );
+    assert_eq!(
+        terminal.last_committed_frame.viewport.visible_cursor_row(),
+        3
+    );
+
+    terminal.push_live("scrolls");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        terminal.last_committed_frame.viewport,
+        ViewportState {
+            first_visible_managed_row: -1,
+            cursor_managed_row: 2,
+        }
+    );
+    assert_eq!(
+        terminal.last_committed_frame.viewport.visible_cursor_row(),
+        3
+    );
+}
+
+#[test]
+fn full_redraw_resets_viewport_for_short_exact_footprint_and_long_content() {
+    let mut terminal = Terminal::new(
+        RecordingBackend::default(),
+        TerminalSize {
+            width: 80,
+            height: 4,
+        },
+        CursorPosition { row: 2, column: 0 },
+    )
+    .unwrap();
+
+    terminal.push_live("short");
+    terminal.force_full_redraw();
+    terminal.render().unwrap();
+    assert_eq!(
+        terminal.last_committed_frame.viewport,
+        ViewportState {
+            first_visible_managed_row: 0,
+            cursor_managed_row: 1,
+        }
+    );
+
+    terminal.clear_live();
+    terminal.push_live("one");
+    terminal.push_live("two");
+    terminal.push_live("three");
+    terminal.force_full_redraw();
+    terminal.render().unwrap();
+    assert_eq!(
+        terminal.last_committed_frame.viewport,
+        ViewportState {
+            first_visible_managed_row: 0,
+            cursor_managed_row: 3,
+        }
+    );
+
+    terminal.push_live("four");
+    terminal.push_live("five");
+    terminal.force_full_redraw();
+    terminal.render().unwrap();
+    assert_eq!(
+        terminal.last_committed_frame.viewport,
+        ViewportState {
+            first_visible_managed_row: 2,
+            cursor_managed_row: 5,
+        }
+    );
+    assert_eq!(
+        terminal.last_committed_frame.viewport.visible_cursor_row(),
+        3
+    );
+}
+
+#[test]
+fn insert_that_would_push_sentinel_below_initial_viewport_falls_back_to_full_redraw() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["bottom"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 4,
+        },
+        CursorPosition { row: 2, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["top", "bottom"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations(),
+        vec![
+            Operation::HideCursor,
+            Operation::Flush,
+            Operation::Write("bottom".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+            Operation::ClearScreen,
+            Operation::PurgeScrollback,
+            Operation::MoveToTopLeft,
+            Operation::Write("top".to_owned()),
+            Operation::Newline,
+            Operation::Write("bottom".to_owned()),
+            Operation::Newline,
             Operation::Flush,
         ]
     );
@@ -471,10 +625,7 @@ fn tail_delete_clears_exposed_rows_with_delete_lines_and_restores_sentinel() {
     );
     assert_eq!(
         terminal.last_committed_frame,
-        CommittedFrame {
-            lines: vec!["head".to_owned()],
-            sentinel_row: 1,
-        }
+        committed_frame(vec!["head".to_owned()], 0, 1)
     );
 }
 
@@ -515,13 +666,14 @@ fn multi_line_middle_delete_preserves_shifted_suffix_without_redrawing_it() {
 
 #[test]
 fn delete_target_above_visible_viewport_falls_back_to_full_redraw() {
-    let last_frame = CommittedFrame {
-        lines: ["zero", "one", "two", "three"]
+    let last_frame = committed_frame(
+        ["zero", "one", "two", "three"]
             .into_iter()
             .map(str::to_owned)
             .collect(),
-        sentinel_row: 4,
-    };
+        2,
+        4,
+    );
     let current_frame = ["zero", "two", "three"]
         .into_iter()
         .map(str::to_owned)
@@ -534,13 +686,14 @@ fn delete_target_above_visible_viewport_falls_back_to_full_redraw() {
 
 #[test]
 fn insert_target_above_visible_viewport_falls_back_to_full_redraw() {
-    let last_frame = CommittedFrame {
-        lines: ["zero", "one", "two", "three"]
+    let last_frame = committed_frame(
+        ["zero", "one", "two", "three"]
             .into_iter()
             .map(str::to_owned)
             .collect(),
-        sentinel_row: 4,
-    };
+        2,
+        4,
+    );
     let current_frame = ["zero", "inserted", "one", "two", "three"]
         .into_iter()
         .map(str::to_owned)
@@ -589,7 +742,7 @@ fn pure_append_writes_at_sentinel_without_clearing_and_tracks_scrolled_sentinel(
             Operation::Flush,
         ]
     );
-    assert_eq!(terminal.last_committed_frame.sentinel_row, 4);
+    assert_eq!(terminal.last_committed_frame.viewport.cursor_managed_row, 4);
 }
 
 #[test]
@@ -802,10 +955,7 @@ fn changed_line_commit_clones_borrowed_frame_after_successful_patch() {
 
     assert_eq!(
         terminal.last_committed_frame,
-        CommittedFrame {
-            lines: vec!["new".to_owned()],
-            sentinel_row: 1,
-        }
+        committed_frame(vec!["new".to_owned()], 0, 1)
     );
     assert!(!terminal.needs_full_redraw);
 }
@@ -867,10 +1017,7 @@ fn patience_diff_uses_unique_anchors_and_translates_replacements_with_tails() {
 
 #[test]
 fn changed_line_planning_is_side_effect_free_and_borrows_current_lines() {
-    let last_frame = CommittedFrame {
-        lines: vec!["old".to_owned()],
-        sentinel_row: 1,
-    };
+    let last_frame = committed_frame(vec!["old".to_owned()], 0, 1);
     let current_frame = vec!["new".to_owned()];
 
     let plan = plan_frame_render(&last_frame, &current_frame, 24, false);
@@ -964,10 +1111,7 @@ fn empty_document_render_commits_empty_frame_with_sentinel() {
     );
     assert_eq!(
         terminal.last_committed_frame,
-        CommittedFrame {
-            lines: Vec::new(),
-            sentinel_row: 0,
-        }
+        committed_frame(Vec::new(), 0, 0)
     );
 }
 
@@ -1010,10 +1154,7 @@ fn failed_flush_does_not_commit_frame() {
     assert!(terminal.render().is_err());
     assert_eq!(
         terminal.last_committed_frame,
-        CommittedFrame {
-            lines: Vec::new(),
-            sentinel_row: 0,
-        }
+        committed_frame(Vec::new(), 0, 0)
     );
     assert!(terminal.needs_full_redraw);
 
@@ -1064,10 +1205,7 @@ fn backend_operation_failure_during_render_preserves_frame_and_repairs_with_full
     assert!(matches!(err, TerminalError::Backend(OperationFailed)));
     assert_eq!(
         terminal.last_committed_frame,
-        CommittedFrame {
-            lines: vec!["committed".to_owned()],
-            sentinel_row: 1,
-        }
+        committed_frame(vec!["committed".to_owned()], 0, 1)
     );
     assert!(terminal.needs_full_redraw);
 
@@ -1141,10 +1279,7 @@ fn selected_changed_line_operation_failures_are_transactional() {
         );
         assert_eq!(
             terminal.last_committed_frame,
-            CommittedFrame {
-                lines: vec!["old".to_owned()],
-                sentinel_row: 1,
-            }
+            committed_frame(vec!["old".to_owned()], 0, 1)
         );
         assert!(terminal.needs_full_redraw);
 
@@ -1152,10 +1287,7 @@ fn selected_changed_line_operation_failures_are_transactional() {
 
         assert_eq!(
             terminal.last_committed_frame,
-            CommittedFrame {
-                lines: vec!["new".to_owned()],
-                sentinel_row: 1,
-            }
+            committed_frame(vec!["new".to_owned()], 0, 1)
         );
         assert!(!terminal.needs_full_redraw);
     }
@@ -1724,10 +1856,7 @@ fn backend_operation_failure_during_finish_preserves_retry_state_and_repairs() {
     );
     assert_eq!(
         terminal.last_committed_frame,
-        CommittedFrame {
-            lines: vec!["committed".to_owned()],
-            sentinel_row: 1,
-        }
+        committed_frame(vec!["committed".to_owned()], 0, 1)
     );
     assert!(terminal.needs_full_redraw);
 

@@ -2,7 +2,7 @@ use crate::{Backend, TerminalError};
 
 use super::{
     diff::{DocumentPatch, patience_diff, translate_diff_to_patches},
-    frame::{CommittedFrame, frame_changed, is_append_only},
+    frame::{CommittedFrame, ViewportState, frame_changed, is_append_only},
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -25,40 +25,66 @@ pub(super) enum FramePlan<'a> {
     FullRedraw,
 }
 
+struct PlannedFrameRender<'a> {
+    frame_plan: FramePlan<'a>,
+    viewport: ViewportState,
+}
+
 pub(super) fn render_frame_transaction<B: Backend>(
     backend: &mut B,
     last_frame: &CommittedFrame,
     current_frame: &[String],
     height: usize,
     needs_full_redraw: bool,
-) -> Result<(), TerminalError<B::Error>> {
-    match plan_frame_render(last_frame, current_frame, height, needs_full_redraw) {
+) -> Result<ViewportState, TerminalError<B::Error>> {
+    let planned = plan_frame_render_update(last_frame, current_frame, height, needs_full_redraw);
+    match &planned.frame_plan {
         FramePlan::NoChanges => {}
         FramePlan::Appended(lines) => render_appended_lines(backend, lines)?,
-        FramePlan::ChangedLines(operations) => render_planned_operations(backend, &operations)?,
+        FramePlan::ChangedLines(operations) => render_planned_operations(backend, operations)?,
         FramePlan::FullRedraw => render_full_frame(backend, current_frame)?,
     }
 
     backend.flush()?;
-    Ok(())
+    Ok(planned.viewport)
 }
 
+#[cfg(test)]
 pub(super) fn plan_frame_render<'a>(
     last_frame: &CommittedFrame,
     current_frame: &'a [String],
     height: usize,
     needs_full_redraw: bool,
 ) -> FramePlan<'a> {
+    plan_frame_render_update(last_frame, current_frame, height, needs_full_redraw).frame_plan
+}
+
+fn plan_frame_render_update<'a>(
+    last_frame: &CommittedFrame,
+    current_frame: &'a [String],
+    height: usize,
+    needs_full_redraw: bool,
+) -> PlannedFrameRender<'a> {
     if needs_full_redraw {
-        return FramePlan::FullRedraw;
+        return PlannedFrameRender {
+            frame_plan: FramePlan::FullRedraw,
+            viewport: ViewportState::after_full_redraw(current_frame.len(), height),
+        };
     }
 
     if is_append_only(&last_frame.lines, current_frame) {
-        return FramePlan::Appended(&current_frame[last_frame.lines.len()..]);
+        let appended = &current_frame[last_frame.lines.len()..];
+        return PlannedFrameRender {
+            frame_plan: FramePlan::Appended(appended),
+            viewport: last_frame.viewport.after_newlines(appended.len(), height),
+        };
     }
 
     if !frame_changed(&last_frame.lines, current_frame) {
-        return FramePlan::NoChanges;
+        return PlannedFrameRender {
+            frame_plan: FramePlan::NoChanges,
+            viewport: last_frame.viewport,
+        };
     }
 
     let patches = translate_diff_to_patches(&patience_diff(&last_frame.lines, current_frame));
@@ -67,62 +93,87 @@ pub(super) fn plan_frame_render<'a>(
         last_frame.lines.len(),
         current_frame.len(),
     ) {
-        let simulated_sentinel_row = last_frame.sentinel_row + append_range.len();
-        let first_visible_row = first_visible_row(simulated_sentinel_row, height);
+        let simulated_viewport = last_frame
+            .viewport
+            .after_newlines(append_range.len(), height);
         if remaining_patches.iter().any(|patch| match patch {
-            DocumentPatch::ChangedLine { old_row, .. } => *old_row < first_visible_row,
+            DocumentPatch::ChangedLine { old_row, .. } => {
+                !row_is_visible(simulated_viewport, *old_row, height)
+            }
             DocumentPatch::InsertLines { .. } | DocumentPatch::DeleteLines { .. } => true,
         }) {
-            return FramePlan::FullRedraw;
+            return PlannedFrameRender {
+                frame_plan: FramePlan::FullRedraw,
+                viewport: ViewportState::after_full_redraw(current_frame.len(), height),
+            };
         }
 
         let mut operations = plan_append_operations(&current_frame[append_range]);
         operations.extend(plan_changed_line_operations(
-            simulated_sentinel_row,
+            simulated_viewport,
             remaining_patches,
             current_frame,
         ));
-        return FramePlan::ChangedLines(operations);
+        return PlannedFrameRender {
+            frame_plan: FramePlan::ChangedLines(operations),
+            viewport: simulated_viewport,
+        };
     }
 
-    if let Some(operations) = plan_insert_line_operations(
-        last_frame.sentinel_row,
+    if let Some((operations, viewport)) = plan_insert_line_operations(
+        last_frame.viewport,
         current_frame,
         height,
         patches.as_slice(),
     ) {
-        return FramePlan::ChangedLines(operations);
+        return PlannedFrameRender {
+            frame_plan: FramePlan::ChangedLines(operations),
+            viewport,
+        };
     }
 
-    if let Some(operations) = plan_delete_line_operations(
-        last_frame.sentinel_row,
+    if let Some((operations, viewport)) = plan_delete_line_operations(
+        last_frame.viewport,
         current_frame,
         height,
         patches.as_slice(),
     ) {
-        return FramePlan::ChangedLines(operations);
+        return PlannedFrameRender {
+            frame_plan: FramePlan::ChangedLines(operations),
+            viewport,
+        };
     }
 
     if patches
         .iter()
         .any(|patch| !matches!(patch, DocumentPatch::ChangedLine { .. }))
     {
-        return FramePlan::FullRedraw;
+        return PlannedFrameRender {
+            frame_plan: FramePlan::FullRedraw,
+            viewport: ViewportState::after_full_redraw(current_frame.len(), height),
+        };
     }
 
-    let first_visible_row = first_visible_row(last_frame.sentinel_row, height);
     if patches.iter().any(|patch| match patch {
-        DocumentPatch::ChangedLine { old_row, .. } => *old_row < first_visible_row,
+        DocumentPatch::ChangedLine { old_row, .. } => {
+            !row_is_visible(last_frame.viewport, *old_row, height)
+        }
         DocumentPatch::InsertLines { .. } | DocumentPatch::DeleteLines { .. } => false,
     }) {
-        return FramePlan::FullRedraw;
+        return PlannedFrameRender {
+            frame_plan: FramePlan::FullRedraw,
+            viewport: ViewportState::after_full_redraw(current_frame.len(), height),
+        };
     }
 
-    FramePlan::ChangedLines(plan_changed_line_operations(
-        last_frame.sentinel_row,
-        patches,
-        current_frame,
-    ))
+    PlannedFrameRender {
+        frame_plan: FramePlan::ChangedLines(plan_changed_line_operations(
+            last_frame.viewport,
+            patches,
+            current_frame,
+        )),
+        viewport: last_frame.viewport,
+    }
 }
 
 fn render_planned_operations<B: Backend>(
@@ -145,8 +196,10 @@ fn render_planned_operations<B: Backend>(
     Ok(())
 }
 
-fn first_visible_row(sentinel_row: usize, height: usize) -> usize {
-    sentinel_row.saturating_sub(height.saturating_sub(1))
+fn row_is_visible(viewport: ViewportState, row: usize, height: usize) -> bool {
+    row as isize >= viewport.first_visible_managed_row
+        && row <= viewport.cursor_managed_row
+        && (row as isize - viewport.first_visible_managed_row) < height as isize
 }
 
 fn plan_append_operations(lines: &[String]) -> Vec<PlannedOperation<'_>> {
@@ -178,21 +231,25 @@ fn extract_trailing_append(
 }
 
 fn plan_insert_line_operations<'a>(
-    sentinel_row: usize,
+    viewport: ViewportState,
     current_frame: &'a [String],
     height: usize,
     patches: &[DocumentPatch],
-) -> Option<Vec<PlannedOperation<'a>>> {
+) -> Option<(Vec<PlannedOperation<'a>>, ViewportState)> {
     let [DocumentPatch::InsertLines { old_row, current }] = patches else {
         return None;
     };
-    if current_frame.len() >= height || *old_row < first_visible_row(sentinel_row, height) {
+    let resulting_viewport = viewport.with_cursor_managed_row(current_frame.len());
+    if !row_is_visible(viewport, *old_row, height) || !resulting_viewport.cursor_is_visible(height)
+    {
         return None;
     }
 
     let inserted_count = current.len();
     let mut operations = Vec::new();
-    operations.push(PlannedOperation::MoveUp(sentinel_row - old_row));
+    operations.push(PlannedOperation::MoveUp(
+        viewport.cursor_managed_row.checked_sub(*old_row)?,
+    ));
     operations.push(PlannedOperation::CarriageReturn);
     operations.push(PlannedOperation::InsertLines(inserted_count));
     for (offset, current_row) in current.clone().enumerate() {
@@ -203,36 +260,40 @@ fn plan_insert_line_operations<'a>(
         operations.push(PlannedOperation::Write(current_frame[current_row].as_str()));
     }
     operations.push(PlannedOperation::CarriageReturn);
-    operations.push(PlannedOperation::MoveDown(sentinel_row - old_row + 1));
-    Some(operations)
+    operations.push(PlannedOperation::MoveDown(
+        viewport.cursor_managed_row.checked_sub(*old_row)? + 1,
+    ));
+    Some((operations, resulting_viewport))
 }
 
 fn plan_delete_line_operations<'a>(
-    sentinel_row: usize,
+    viewport: ViewportState,
     current_frame: &'a [String],
     height: usize,
     patches: &[DocumentPatch],
-) -> Option<Vec<PlannedOperation<'a>>> {
+) -> Option<(Vec<PlannedOperation<'a>>, ViewportState)> {
     let [DocumentPatch::DeleteLines { old }] = patches else {
         return None;
     };
-    if old.start < first_visible_row(sentinel_row, height) {
+    let resulting_viewport = viewport.with_cursor_managed_row(current_frame.len());
+    if !row_is_visible(viewport, old.start, height) || !resulting_viewport.cursor_is_visible(height)
+    {
         return None;
     }
 
-    let distance_from_sentinel = sentinel_row.checked_sub(old.start)?;
-    let distance_to_current_sentinel = current_frame.len().checked_sub(old.start)?;
+    let distance_from_cursor = viewport.cursor_managed_row.checked_sub(old.start)?;
+    let distance_to_current_cursor = current_frame.len().checked_sub(old.start)?;
 
     let mut operations = Vec::new();
-    operations.push(PlannedOperation::MoveUp(distance_from_sentinel));
+    operations.push(PlannedOperation::MoveUp(distance_from_cursor));
     operations.push(PlannedOperation::CarriageReturn);
     operations.push(PlannedOperation::DeleteLines(old.len()));
-    operations.push(PlannedOperation::MoveDown(distance_to_current_sentinel));
-    Some(operations)
+    operations.push(PlannedOperation::MoveDown(distance_to_current_cursor));
+    Some((operations, resulting_viewport))
 }
 
 fn plan_changed_line_operations<'a>(
-    sentinel_row: usize,
+    viewport: ViewportState,
     patches: Vec<DocumentPatch>,
     current_frame: &'a [String],
 ) -> Vec<PlannedOperation<'a>> {
@@ -245,13 +306,13 @@ fn plan_changed_line_operations<'a>(
         else {
             continue;
         };
-        let distance_from_sentinel = sentinel_row - old_row;
-        operations.push(PlannedOperation::MoveUp(distance_from_sentinel));
+        let distance_from_cursor = viewport.cursor_managed_row - old_row;
+        operations.push(PlannedOperation::MoveUp(distance_from_cursor));
         operations.push(PlannedOperation::CarriageReturn);
         operations.push(PlannedOperation::ClearLine);
         operations.push(PlannedOperation::Write(current_frame[current_row].as_str()));
         operations.push(PlannedOperation::CarriageReturn);
-        operations.push(PlannedOperation::MoveDown(distance_from_sentinel));
+        operations.push(PlannedOperation::MoveDown(distance_from_cursor));
     }
     operations
 }

@@ -9,7 +9,7 @@ use crate::{
     Backend, Block, CursorPosition, LifecycleError, TerminalError, TerminalSize, region::Region,
 };
 
-use frame::{CommittedFrame, current_frame};
+use frame::{CommittedFrame, ViewportState, current_frame};
 use rendering::render_frame_transaction;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,7 +53,7 @@ impl<B: Backend> Terminal<B> {
             pinned_blocks: Region::default(),
             last_committed_frame: CommittedFrame {
                 lines: Vec::new(),
-                sentinel_row: 0,
+                viewport: ViewportState::initial(cursor),
             },
             needs_full_redraw: false,
         })
@@ -171,23 +171,25 @@ impl<B: Backend> Terminal<B> {
             self.size.width.saturating_sub(1),
         );
 
-        if let Err(err) = render_frame_transaction(
+        let viewport = match render_frame_transaction(
             &mut self.backend,
             &self.last_committed_frame,
             &frame,
             self.size.height,
             self.needs_full_redraw,
         ) {
-            self.needs_full_redraw = true;
-            return Err(err);
-        }
+            Ok(viewport) => viewport,
+            Err(err) => {
+                self.needs_full_redraw = true;
+                return Err(err);
+            }
+        };
 
-        let sentinel_row = frame.len();
         self.live_blocks.mark_all_clean();
         self.pinned_blocks.mark_all_clean();
         self.last_committed_frame = CommittedFrame {
             lines: frame,
-            sentinel_row,
+            viewport,
         };
         self.needs_full_redraw = false;
         Ok(())
@@ -216,22 +218,24 @@ impl<B: Backend> Terminal<B> {
                 .live_blocks
                 .render_lines(self.size.width.saturating_sub(1));
 
-            if let Err(err) = render_frame_transaction(
+            let viewport = match render_frame_transaction(
                 &mut self.backend,
                 &self.last_committed_frame,
                 &frame,
                 self.size.height,
                 self.needs_full_redraw,
             ) {
-                self.needs_full_redraw = true;
-                return Err(err);
-            }
+                Ok(viewport) => viewport,
+                Err(err) => {
+                    self.needs_full_redraw = true;
+                    return Err(err);
+                }
+            };
 
-            let sentinel_row = frame.len();
             self.live_blocks.mark_all_clean();
             self.last_committed_frame = CommittedFrame {
                 lines: frame,
-                sentinel_row,
+                viewport,
             };
             self.needs_full_redraw = false;
             self.lifecycle = Lifecycle::Finishing {
