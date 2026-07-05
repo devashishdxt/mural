@@ -14,3 +14,6 @@ categories = ["command-line-interface"]
 drape = "0.1.0"
 termina = "0.3"
 thiserror = "2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }

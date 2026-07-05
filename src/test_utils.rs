@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 mod blocks;
 mod failing_backend;
 mod recording_backend;

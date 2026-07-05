@@ -1,3 +1,4 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![deny(missing_docs)]
 
 //! Normal-screen conversational terminal rendering.

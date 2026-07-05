@@ -50,6 +50,7 @@ pub(super) fn render_frame_transaction<B: Backend>(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn plan_frame_render<'a>(
     last_frame: &CommittedFrame,
     current_frame: &'a [String],
@@ -111,7 +112,7 @@ fn plan_frame_render_update<'a>(
         let mut operations = plan_append_operations(&current_frame[append_range]);
         operations.extend(plan_changed_line_operations(
             simulated_viewport,
-            remaining_patches,
+            changed_line_patches(remaining_patches),
             current_frame,
         ));
         return PlannedFrameRender {
@@ -154,12 +155,11 @@ fn plan_frame_render_update<'a>(
         };
     }
 
-    if patches.iter().any(|patch| match patch {
-        DocumentPatch::ChangedLine { old_row, .. } => {
-            !row_is_visible(last_frame.viewport, *old_row, height)
-        }
-        DocumentPatch::InsertLines { .. } | DocumentPatch::DeleteLines { .. } => false,
-    }) {
+    let changed_line_patches = changed_line_patches(patches);
+    if changed_line_patches
+        .iter()
+        .any(|(old_row, _)| !row_is_visible(last_frame.viewport, *old_row, height))
+    {
         return PlannedFrameRender {
             frame_plan: FramePlan::FullRedraw,
             viewport: ViewportState::after_full_redraw(current_frame.len(), height),
@@ -169,7 +169,7 @@ fn plan_frame_render_update<'a>(
     PlannedFrameRender {
         frame_plan: FramePlan::ChangedLines(plan_changed_line_operations(
             last_frame.viewport,
-            patches,
+            changed_line_patches,
             current_frame,
         )),
         viewport: last_frame.viewport,
@@ -284,28 +284,35 @@ fn plan_delete_line_operations<'a>(
     let distance_from_cursor = viewport.cursor_managed_row.checked_sub(old.start)?;
     let distance_to_current_cursor = current_frame.len().checked_sub(old.start)?;
 
-    let mut operations = Vec::new();
-    operations.push(PlannedOperation::MoveUp(distance_from_cursor));
-    operations.push(PlannedOperation::CarriageReturn);
-    operations.push(PlannedOperation::DeleteLines(old.len()));
-    operations.push(PlannedOperation::MoveDown(distance_to_current_cursor));
+    let operations = vec![
+        PlannedOperation::MoveUp(distance_from_cursor),
+        PlannedOperation::CarriageReturn,
+        PlannedOperation::DeleteLines(old.len()),
+        PlannedOperation::MoveDown(distance_to_current_cursor),
+    ];
     Some((operations, resulting_viewport))
+}
+
+fn changed_line_patches(patches: Vec<DocumentPatch>) -> Vec<(usize, usize)> {
+    patches
+        .into_iter()
+        .filter_map(|patch| match patch {
+            DocumentPatch::ChangedLine {
+                old_row,
+                current_row,
+            } => Some((old_row, current_row)),
+            DocumentPatch::InsertLines { .. } | DocumentPatch::DeleteLines { .. } => None,
+        })
+        .collect()
 }
 
 fn plan_changed_line_operations<'a>(
     viewport: ViewportState,
-    patches: Vec<DocumentPatch>,
+    patches: Vec<(usize, usize)>,
     current_frame: &'a [String],
 ) -> Vec<PlannedOperation<'a>> {
     let mut operations = Vec::new();
-    for patch in patches {
-        let DocumentPatch::ChangedLine {
-            old_row,
-            current_row,
-        } = patch
-        else {
-            continue;
-        };
+    for (old_row, current_row) in patches {
         let distance_from_cursor = viewport.cursor_managed_row - old_row;
         operations.push(PlannedOperation::MoveUp(distance_from_cursor));
         operations.push(PlannedOperation::CarriageReturn);

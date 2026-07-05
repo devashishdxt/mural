@@ -1,7 +1,9 @@
 use std::borrow::Cow;
 
 use super::{
-    diff::{DiffOp, DocumentPatch, patience_diff, translate_diff_to_patches},
+    diff::{
+        DiffOp, DocumentPatch, coalesce_diff_operations, patience_diff, translate_diff_to_patches,
+    },
     frame::{CommittedFrame, ViewportState},
     rendering::{FramePlan, PlannedOperation, plan_frame_render},
     *,
@@ -1199,8 +1201,7 @@ fn backend_operation_failure_during_render_preserves_frame_and_repairs_with_full
 
     let err = terminal
         .render()
-        .err()
-        .expect("backend operation failure should be reported");
+        .expect_err("backend operation failure should be reported");
 
     assert!(matches!(err, TerminalError::Backend(OperationFailed)));
     assert_eq!(
@@ -1268,8 +1269,7 @@ fn selected_changed_line_operation_failures_are_transactional() {
 
         let err = terminal
             .render()
-            .err()
-            .expect("selected backend operation should fail");
+            .expect_err("selected backend operation should fail");
 
         assert!(matches!(err, TerminalError::Backend(OperationFailed)));
         assert_eq!(
@@ -1554,8 +1554,7 @@ fn invalid_resize_is_memory_only_and_leaves_committed_state_unchanged() {
             width: 0,
             height: 40,
         })
-        .err()
-        .expect("zero width resize should fail");
+        .expect_err("zero width resize should fail");
     terminal.render().unwrap();
 
     assert!(matches!(err, TerminalError::InvalidTerminalSize));
@@ -1678,10 +1677,7 @@ fn resize_after_finish_start_or_completion_does_not_write_or_reopen_rendering() 
             height: 12,
         })
         .unwrap();
-    let err = terminal
-        .render()
-        .err()
-        .expect("render should stay rejected");
+    let err = terminal.render().expect_err("render should stay rejected");
 
     assert_eq!(operations.operations(), before_resize);
     assert!(matches!(
@@ -1709,14 +1705,8 @@ fn resize_after_finish_start_or_completion_does_not_write_or_reopen_rendering() 
             height: 30,
         })
         .unwrap();
-    let render_err = terminal
-        .render()
-        .err()
-        .expect("render should stay rejected");
-    let finish_err = terminal
-        .finish()
-        .err()
-        .expect("finish should stay completed");
+    let render_err = terminal.render().expect_err("render should stay rejected");
+    let finish_err = terminal.finish().expect_err("finish should stay completed");
 
     assert_eq!(operations.operations(), before_resize);
     assert!(matches!(
@@ -1844,8 +1834,7 @@ fn backend_operation_failure_during_finish_preserves_retry_state_and_repairs() {
 
     let err = terminal
         .finish()
-        .err()
-        .expect("backend operation failure should be reported");
+        .expect_err("backend operation failure should be reported");
 
     assert!(matches!(err, TerminalError::Backend(OperationFailed)));
     assert_eq!(
@@ -1935,7 +1924,7 @@ fn render_errors_after_finish_starts_even_when_finish_fails() {
     terminal.push_live("final live");
     assert!(terminal.finish().is_err());
 
-    let err = terminal.render().err().expect("render should be rejected");
+    let err = terminal.render().expect_err("render should be rejected");
     assert!(matches!(
         err,
         TerminalError::Lifecycle(LifecycleError::RenderAfterFinishStarted)
@@ -2050,10 +2039,7 @@ fn mutations_after_finished_are_memory_only_and_do_not_enable_render() {
             .map(|block| block.0),
         Some("stored pinned")
     );
-    let err = terminal
-        .render()
-        .err()
-        .expect("render should stay rejected");
+    let err = terminal.render().expect_err("render should stay rejected");
     assert!(matches!(
         err,
         TerminalError::Lifecycle(LifecycleError::RenderAfterFinishStarted)
@@ -2088,7 +2074,7 @@ fn finish_after_finished_errors_and_drop_writes_no_cleanup() {
 
         terminal.push_live("done");
         terminal.finish().unwrap();
-        let err = terminal.finish().err().expect("second finish should fail");
+        let err = terminal.finish().expect_err("second finish should fail");
         assert!(matches!(
             err,
             TerminalError::Lifecycle(LifecycleError::AlreadyFinished)
@@ -2164,4 +2150,202 @@ fn block_every_frame_hook_defaults_to_false() {
     }
 
     assert!(!MinimalBlock.render_every_frame());
+}
+
+#[test]
+fn built_in_owned_string_and_cow_blocks_render() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 24,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.push_live(String::from("owned string"));
+    terminal.push_pinned(Cow::Borrowed("borrowed cow"));
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations(),
+        vec![
+            Operation::HideCursor,
+            Operation::Flush,
+            Operation::Write("owned string".to_owned()),
+            Operation::Newline,
+            Operation::Write("borrowed cow".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn pinned_mutation_and_removal_update_only_pinned_region() {
+    let live = CountingBlock::new("live");
+    let pinned = CountingBlock::new("old pinned");
+    let mut terminal = Terminal::new(
+        RecordingBackend::default(),
+        TerminalSize {
+            width: 80,
+            height: 24,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("live", live.clone());
+    terminal.insert_pinned("status", pinned.clone());
+    terminal.render().unwrap();
+
+    terminal
+        .get_pinned_mut::<CountingBlock, _>("status")
+        .expect("pinned status should exist")
+        .set_text("new pinned");
+    terminal.render().unwrap();
+
+    assert_eq!(live.render_count(), 1);
+    assert_eq!(pinned.render_count(), 2);
+    assert_eq!(
+        terminal.last_committed_frame,
+        committed_frame(vec!["live".to_owned(), "new pinned".to_owned()], 0, 2)
+    );
+    assert!(terminal.remove_pinned("status"));
+    assert!(!terminal.remove_pinned("status"));
+}
+
+#[test]
+fn replacement_with_shorter_current_translates_trailing_delete() {
+    let patches = translate_diff_to_patches(&[
+        DiffOp::Delete { old: 2..5 },
+        DiffOp::Insert { current: 2..3 },
+    ]);
+
+    assert_eq!(
+        patches,
+        vec![
+            DocumentPatch::ChangedLine {
+                old_row: 2,
+                current_row: 2,
+            },
+            DocumentPatch::DeleteLines { old: 3..5 },
+        ]
+    );
+}
+
+#[test]
+fn insertion_old_row_skips_prior_insert_operations() {
+    let patches = translate_diff_to_patches(&[
+        DiffOp::Equal {
+            old: 0..1,
+            current: 0..1,
+        },
+        DiffOp::Insert { current: 1..2 },
+        DiffOp::Insert { current: 2..3 },
+    ]);
+
+    assert_eq!(
+        patches,
+        vec![
+            DocumentPatch::InsertLines {
+                old_row: 1,
+                current: 1..2,
+            },
+            DocumentPatch::InsertLines {
+                old_row: 1,
+                current: 2..3,
+            },
+        ]
+    );
+}
+
+#[test]
+fn patience_diff_ignores_duplicate_candidates_and_keeps_increasing_anchors() {
+    let old = vec!["x", "repeat", "repeat", "current-dup", "a", "b", "old-tail"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let current = vec![
+        "y",
+        "repeat",
+        "current-dup",
+        "current-dup",
+        "a",
+        "b",
+        "new-tail",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+
+    let diff = patience_diff(&old, &current);
+
+    assert_eq!(
+        diff,
+        vec![
+            DiffOp::Delete { old: 0..3 },
+            DiffOp::Insert { current: 0..3 },
+            DiffOp::Equal {
+                old: 3..6,
+                current: 3..6,
+            },
+            DiffOp::Delete { old: 6..7 },
+            DiffOp::Insert { current: 6..7 },
+        ]
+    );
+}
+
+#[test]
+fn coalesce_merges_adjacent_operations_and_drops_empty_operations() {
+    let diff = coalesce_diff_operations(vec![
+        DiffOp::Equal {
+            old: 0..0,
+            current: 0..0,
+        },
+        DiffOp::Equal {
+            old: 0..1,
+            current: 0..1,
+        },
+        DiffOp::Equal {
+            old: 1..2,
+            current: 1..2,
+        },
+        DiffOp::Delete { old: 2..2 },
+        DiffOp::Delete { old: 2..3 },
+        DiffOp::Delete { old: 3..4 },
+        DiffOp::Insert { current: 2..2 },
+        DiffOp::Insert { current: 2..3 },
+        DiffOp::Insert { current: 3..4 },
+    ]);
+
+    assert_eq!(
+        diff,
+        vec![
+            DiffOp::Equal {
+                old: 0..2,
+                current: 0..2,
+            },
+            DiffOp::Delete { old: 2..4 },
+            DiffOp::Insert { current: 2..4 },
+        ]
+    );
+}
+
+#[test]
+fn trailing_append_with_earlier_insert_falls_back_to_full_redraw() {
+    let last_frame = committed_frame(vec!["a".to_owned(), "b".to_owned()], 0, 2);
+    let current_frame = vec![
+        "x".to_owned(),
+        "a".to_owned(),
+        "b".to_owned(),
+        "c".to_owned(),
+    ];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 24, false);
+
+    assert_eq!(plan, FramePlan::FullRedraw);
 }

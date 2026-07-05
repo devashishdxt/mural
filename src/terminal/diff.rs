@@ -259,7 +259,7 @@ fn longest_increasing_subsequence_by_current_index(
     sequence
 }
 
-fn coalesce_diff_operations(operations: Vec<DiffOp>) -> Vec<DiffOp> {
+pub(super) fn coalesce_diff_operations(operations: Vec<DiffOp>) -> Vec<DiffOp> {
     let mut coalesced = Vec::new();
     for operation in operations {
         match (coalesced.last_mut(), operation) {

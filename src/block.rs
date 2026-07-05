@@ -13,7 +13,7 @@ pub trait Block {
 
 impl Block for &str {
     fn render(&self, width: usize) -> Vec<Cow<'_, str>> {
-        drape::wrap(*self, width)
+        drape::wrap(self, width)
     }
 }
 

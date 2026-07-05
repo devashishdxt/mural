@@ -3,6 +3,7 @@ mod frame;
 mod rendering;
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests;
 
 use crate::{
