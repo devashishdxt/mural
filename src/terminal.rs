@@ -23,7 +23,6 @@ enum Lifecycle {
 pub struct Terminal<B: Backend> {
     backend: B,
     size: TerminalSize,
-    _cursor: CursorPosition,
     lifecycle: Lifecycle,
     live_blocks: Region,
     pinned_blocks: Region,
@@ -48,7 +47,6 @@ impl<B: Backend> Terminal<B> {
         Ok(Self {
             backend,
             size,
-            _cursor: cursor,
             lifecycle: Lifecycle::Running,
             live_blocks: Region::default(),
             pinned_blocks: Region::default(),
