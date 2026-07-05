@@ -9,12 +9,13 @@ use termina::{
 
 use super::Backend;
 
-/// Default backend backed by the current platform terminal.
+/// Backend backed by the `termina` crate.
 pub struct TerminaBackend {
     terminal: PlatformTerminal,
 }
 
 impl TerminaBackend {
+    /// Open the current terminal for rendering.
     pub fn new() -> Result<Self, io::Error> {
         Ok(Self {
             terminal: PlatformTerminal::new()?,

@@ -19,7 +19,7 @@ enum Lifecycle {
     Finished,
 }
 
-/// Renderer entry point over a semantic backend.
+/// Normal-screen renderer.
 pub struct Terminal<B: Backend> {
     backend: B,
     size: TerminalSize,
@@ -32,6 +32,7 @@ pub struct Terminal<B: Backend> {
 }
 
 impl<B: Backend> Terminal<B> {
+    /// Create a renderer from caller-supplied terminal state.
     pub fn new(
         mut backend: B,
         size: TerminalSize,
@@ -59,6 +60,7 @@ impl<B: Backend> Terminal<B> {
         })
     }
 
+    /// Append a durable live block to the transcript region.
     pub fn push_live<BlockType>(&mut self, block: BlockType)
     where
         BlockType: Block + 'static,
@@ -66,6 +68,7 @@ impl<B: Backend> Terminal<B> {
         self.live_blocks.push(block);
     }
 
+    /// Append a transient pinned block rendered after live content.
     pub fn push_pinned<BlockType>(&mut self, block: BlockType)
     where
         BlockType: Block + 'static,
@@ -73,6 +76,7 @@ impl<B: Backend> Terminal<B> {
         self.pinned_blocks.push(block);
     }
 
+    /// Insert or replace a named live block.
     pub fn insert_live<Id, BlockType>(&mut self, id: Id, block: BlockType)
     where
         Id: Into<String>,
@@ -81,6 +85,7 @@ impl<B: Backend> Terminal<B> {
         self.live_blocks.insert(id, block);
     }
 
+    /// Insert or replace a named pinned block.
     pub fn insert_pinned<Id, BlockType>(&mut self, id: Id, block: BlockType)
     where
         Id: Into<String>,
@@ -89,6 +94,7 @@ impl<B: Backend> Terminal<B> {
         self.pinned_blocks.insert(id, block);
     }
 
+    /// Get a named live block with the requested type.
     pub fn get_live<BlockType, Id>(&self, id: Id) -> Option<&BlockType>
     where
         BlockType: Block + 'static,
@@ -97,6 +103,7 @@ impl<B: Backend> Terminal<B> {
         self.live_blocks.get(id)
     }
 
+    /// Get a named pinned block with the requested type.
     pub fn get_pinned<BlockType, Id>(&self, id: Id) -> Option<&BlockType>
     where
         BlockType: Block + 'static,
@@ -105,6 +112,7 @@ impl<B: Backend> Terminal<B> {
         self.pinned_blocks.get(id)
     }
 
+    /// Get a mutable named live block with the requested type.
     pub fn get_live_mut<BlockType, Id>(&mut self, id: Id) -> Option<&mut BlockType>
     where
         BlockType: Block + 'static,
@@ -113,6 +121,7 @@ impl<B: Backend> Terminal<B> {
         self.live_blocks.get_mut(id)
     }
 
+    /// Get a mutable named pinned block with the requested type.
     pub fn get_pinned_mut<BlockType, Id>(&mut self, id: Id) -> Option<&mut BlockType>
     where
         BlockType: Block + 'static,
@@ -121,6 +130,7 @@ impl<B: Backend> Terminal<B> {
         self.pinned_blocks.get_mut(id)
     }
 
+    /// Remove a named live block, returning whether a block was removed.
     pub fn remove_live<Id>(&mut self, id: Id) -> bool
     where
         Id: AsRef<str>,
@@ -128,6 +138,7 @@ impl<B: Backend> Terminal<B> {
         self.live_blocks.remove(id)
     }
 
+    /// Remove a named pinned block, returning whether a block was removed.
     pub fn remove_pinned<Id>(&mut self, id: Id) -> bool
     where
         Id: AsRef<str>,
@@ -135,14 +146,17 @@ impl<B: Backend> Terminal<B> {
         self.pinned_blocks.remove(id)
     }
 
+    /// Remove all live blocks from the durable transcript region.
     pub fn clear_live(&mut self) {
         self.live_blocks.clear();
     }
 
+    /// Remove all pinned blocks from the transient region.
     pub fn clear_pinned(&mut self) {
         self.pinned_blocks.clear();
     }
 
+    /// Update the terminal size after a resize.
     pub fn resize(&mut self, size: TerminalSize) -> Result<(), TerminalError<B::Error>> {
         validate_size(size)?;
         if size.width != self.size.width {
@@ -154,10 +168,12 @@ impl<B: Backend> Terminal<B> {
         Ok(())
     }
 
+    /// Redraw the managed terminal area on the next render or finish.
     pub fn force_full_redraw(&mut self) {
         self.needs_full_redraw = true;
     }
 
+    /// Render the current live and pinned content.
     pub fn render(&mut self) -> Result<(), TerminalError<B::Error>> {
         if self.lifecycle != Lifecycle::Running {
             return Err(TerminalError::Lifecycle(
@@ -195,6 +211,7 @@ impl<B: Backend> Terminal<B> {
         Ok(())
     }
 
+    /// Finish rendering and leave only live content in the terminal.
     pub fn finish(&mut self) -> Result<(), TerminalError<B::Error>> {
         match self.lifecycle {
             Lifecycle::Running => {

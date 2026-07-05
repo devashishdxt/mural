@@ -1,11 +1,11 @@
 use std::{any::Any, borrow::Cow};
 
-/// Renderable content stored by a terminal region.
+/// Content that can be rendered by a [`Terminal`](crate::Terminal).
 pub trait Block {
-    /// Render this block into terminal visual lines for the supplied safe width.
+    /// Render this block into terminal lines for the supplied width.
     fn render(&self, width: usize) -> Vec<Cow<'_, str>>;
 
-    /// Whether this block should be rendered again on every frame even when clean.
+    /// Return `true` when this block should be refreshed on every render.
     fn render_every_frame(&self) -> bool {
         false
     }
