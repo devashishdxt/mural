@@ -122,6 +122,43 @@ fn patience_diff_range(
         return;
     }
 
+    let (old_start, current_start) = common_prefix_end(old, &old_range, current, &current_range);
+    push_equal(
+        operations,
+        old_range.start..old_start,
+        current_range.start..current_start,
+    );
+
+    let (old_end, current_end) = common_suffix_start(
+        old,
+        old_start,
+        old_range.end,
+        current,
+        current_start,
+        current_range.end,
+    );
+
+    push_anchored_diff_ranges(
+        old,
+        old_start..old_end,
+        current,
+        current_start..current_end,
+        operations,
+    );
+
+    push_equal(
+        operations,
+        old_end..old_range.end,
+        current_end..current_range.end,
+    );
+}
+
+fn common_prefix_end(
+    old: &[String],
+    old_range: &Range<usize>,
+    current: &[String],
+    current_range: &Range<usize>,
+) -> (usize, usize) {
     let mut old_start = old_range.start;
     let mut current_start = current_range.start;
     while old_start < old_range.end
@@ -131,14 +168,18 @@ fn patience_diff_range(
         old_start += 1;
         current_start += 1;
     }
-    push_equal(
-        operations,
-        old_range.start..old_start,
-        current_range.start..current_start,
-    );
 
-    let mut old_end = old_range.end;
-    let mut current_end = current_range.end;
+    (old_start, current_start)
+}
+
+fn common_suffix_start(
+    old: &[String],
+    old_start: usize,
+    mut old_end: usize,
+    current: &[String],
+    current_start: usize,
+    mut current_end: usize,
+) -> (usize, usize) {
     while old_start < old_end
         && current_start < current_end
         && old[old_end - 1] == current[current_end - 1]
@@ -147,42 +188,47 @@ fn patience_diff_range(
         current_end -= 1;
     }
 
-    let anchors = patience_anchors(old, old_start..old_end, current, current_start..current_end);
+    (old_end, current_end)
+}
+
+fn push_anchored_diff_ranges(
+    old: &[String],
+    old_range: Range<usize>,
+    current: &[String],
+    current_range: Range<usize>,
+    operations: &mut Vec<DiffOp>,
+) {
+    let anchors = patience_anchors(old, old_range.clone(), current, current_range.clone());
     if anchors.is_empty() {
-        push_delete(operations, old_start..old_end);
-        push_insert(operations, current_start..current_end);
-    } else {
-        let mut previous_old = old_start;
-        let mut previous_current = current_start;
-        for (old_index, current_index) in anchors {
-            patience_diff_range(
-                old,
-                previous_old..old_index,
-                current,
-                previous_current..current_index,
-                operations,
-            );
-            push_equal(
-                operations,
-                old_index..old_index + 1,
-                current_index..current_index + 1,
-            );
-            previous_old = old_index + 1;
-            previous_current = current_index + 1;
-        }
-        patience_diff_range(
-            old,
-            previous_old..old_end,
-            current,
-            previous_current..current_end,
-            operations,
-        );
+        push_delete(operations, old_range);
+        push_insert(operations, current_range);
+        return;
     }
 
-    push_equal(
+    let mut previous_old = old_range.start;
+    let mut previous_current = current_range.start;
+    for (old_index, current_index) in anchors {
+        patience_diff_range(
+            old,
+            previous_old..old_index,
+            current,
+            previous_current..current_index,
+            operations,
+        );
+        push_equal(
+            operations,
+            old_index..old_index + 1,
+            current_index..current_index + 1,
+        );
+        previous_old = old_index + 1;
+        previous_current = current_index + 1;
+    }
+    patience_diff_range(
+        old,
+        previous_old..old_range.end,
+        current,
+        previous_current..current_range.end,
         operations,
-        old_end..old_range.end,
-        current_end..current_range.end,
     );
 }
 
@@ -262,9 +308,39 @@ fn longest_increasing_subsequence_by_current_index(
 pub(super) fn coalesce_diff_operations(operations: Vec<DiffOp>) -> Vec<DiffOp> {
     let mut coalesced = Vec::new();
     for operation in operations {
-        match (coalesced.last_mut(), operation) {
+        push_coalesced_operation(&mut coalesced, operation);
+    }
+    coalesced
+}
+
+fn push_coalesced_operation(coalesced: &mut Vec<DiffOp>, operation: DiffOp) {
+    if operation.is_empty() {
+        return;
+    }
+
+    if coalesced
+        .last_mut()
+        .is_some_and(|last_operation| last_operation.merge_adjacent(&operation))
+    {
+        return;
+    }
+
+    coalesced.push(operation);
+}
+
+impl DiffOp {
+    fn is_empty(&self) -> bool {
+        match self {
+            DiffOp::Equal { old, current } => old.is_empty() && current.is_empty(),
+            DiffOp::Delete { old } => old.is_empty(),
+            DiffOp::Insert { current } => current.is_empty(),
+        }
+    }
+
+    fn merge_adjacent(&mut self, next: &Self) -> bool {
+        match (self, next) {
             (
-                Some(DiffOp::Equal { old, current }),
+                DiffOp::Equal { old, current },
                 DiffOp::Equal {
                     old: next_old,
                     current: next_current,
@@ -272,27 +348,26 @@ pub(super) fn coalesce_diff_operations(operations: Vec<DiffOp>) -> Vec<DiffOp> {
             ) if old.end == next_old.start && current.end == next_current.start => {
                 old.end = next_old.end;
                 current.end = next_current.end;
+                true
             }
-            (Some(DiffOp::Delete { old }), DiffOp::Delete { old: next_old })
+            (DiffOp::Delete { old }, DiffOp::Delete { old: next_old })
                 if old.end == next_old.start =>
             {
                 old.end = next_old.end;
+                true
             }
             (
-                Some(DiffOp::Insert { current }),
+                DiffOp::Insert { current },
                 DiffOp::Insert {
                     current: next_current,
                 },
             ) if current.end == next_current.start => {
                 current.end = next_current.end;
+                true
             }
-            (_, DiffOp::Equal { old, current }) if old.is_empty() && current.is_empty() => {}
-            (_, DiffOp::Delete { old }) if old.is_empty() => {}
-            (_, DiffOp::Insert { current }) if current.is_empty() => {}
-            (_, operation) => coalesced.push(operation),
+            _ => false,
         }
     }
-    coalesced
 }
 
 fn push_equal(operations: &mut Vec<DiffOp>, old: Range<usize>, current: Range<usize>) {

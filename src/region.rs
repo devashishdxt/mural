@@ -17,15 +17,45 @@ struct CachedBlock {
     cached_lines: Vec<String>,
 }
 
+impl BlockEntry {
+    fn anonymous<BlockType>(block: BlockType) -> Self
+    where
+        BlockType: Block + 'static,
+    {
+        Self {
+            id: None,
+            block: CachedBlock::new(block),
+        }
+    }
+
+    fn identified<BlockType>(id: String, block: BlockType) -> Self
+    where
+        BlockType: Block + 'static,
+    {
+        Self {
+            id: Some(id),
+            block: CachedBlock::new(block),
+        }
+    }
+
+    fn has_id(&self, id: &str) -> bool {
+        self.id.as_deref() == Some(id)
+    }
+
+    fn replace<BlockType>(&mut self, block: BlockType)
+    where
+        BlockType: Block + 'static,
+    {
+        self.block = CachedBlock::new(block);
+    }
+}
+
 impl Region {
     pub(crate) fn push<BlockType>(&mut self, block: BlockType)
     where
         BlockType: Block + 'static,
     {
-        self.entries.push(BlockEntry {
-            id: None,
-            block: CachedBlock::new(block),
-        });
+        self.entries.push(BlockEntry::anonymous(block));
     }
 
     pub(crate) fn insert<Id, BlockType>(&mut self, id: Id, block: BlockType)
@@ -35,14 +65,11 @@ impl Region {
     {
         let id = id.into();
         if let Some(entry) = self.entry_mut(&id) {
-            entry.block = CachedBlock::new(block);
+            entry.replace(block);
             return;
         }
 
-        self.entries.push(BlockEntry {
-            id: Some(id),
-            block: CachedBlock::new(block),
-        });
+        self.entries.push(BlockEntry::identified(id, block));
     }
 
     pub(crate) fn get<BlockType, Id>(&self, id: Id) -> Option<&BlockType>
@@ -66,11 +93,7 @@ impl Region {
         Id: AsRef<str>,
     {
         let id = id.as_ref();
-        let Some(index) = self
-            .entries
-            .iter()
-            .position(|entry| entry.id.as_deref() == Some(id))
-        else {
+        let Some(index) = self.entries.iter().position(|entry| entry.has_id(id)) else {
             return false;
         };
 
@@ -103,15 +126,11 @@ impl Region {
     }
 
     fn entry(&self, id: &str) -> Option<&BlockEntry> {
-        self.entries
-            .iter()
-            .find(|entry| entry.id.as_deref() == Some(id))
+        self.entries.iter().find(|entry| entry.has_id(id))
     }
 
     fn entry_mut(&mut self, id: &str) -> Option<&mut BlockEntry> {
-        self.entries
-            .iter_mut()
-            .find(|entry| entry.id.as_deref() == Some(id))
+        self.entries.iter_mut().find(|entry| entry.has_id(id))
     }
 }
 
@@ -149,20 +168,24 @@ impl CachedBlock {
 
     fn render(&mut self, width: usize) -> &[String] {
         if self.should_render(width) {
-            let rendered_lines = self.block.render(width);
-            debug_assert!(
-                rendered_lines
-                    .iter()
-                    .all(|line| !line.contains('\n') && !line.contains('\r'))
-            );
-            self.cached_lines = rendered_lines
-                .into_iter()
-                .map(|line| line.into_owned())
-                .collect();
-            self.cached_width = Some(width);
+            self.refresh(width);
         }
 
         &self.cached_lines
+    }
+
+    fn refresh(&mut self, width: usize) {
+        let rendered_lines = self.block.render(width);
+        debug_assert!(
+            rendered_lines
+                .iter()
+                .all(|line| !line.contains('\n') && !line.contains('\r'))
+        );
+        self.cached_lines = rendered_lines
+            .into_iter()
+            .map(|line| line.into_owned())
+            .collect();
+        self.cached_width = Some(width);
     }
 
     fn should_render(&self, width: usize) -> bool {
