@@ -347,7 +347,7 @@ fn full_redraw_resets_viewport_for_short_exact_footprint_and_long_content() {
 }
 
 #[test]
-fn insert_that_would_push_sentinel_below_initial_viewport_falls_back_to_full_redraw() {
+fn insert_that_pushes_sentinel_below_initial_viewport_scrolls_when_target_remains_visible() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();
     let block = LinesBlock::new(&["bottom"]);
@@ -377,13 +377,14 @@ fn insert_that_would_push_sentinel_below_initial_viewport_falls_back_to_full_red
             Operation::Write("bottom".to_owned()),
             Operation::Newline,
             Operation::Flush,
-            Operation::ClearScreen,
-            Operation::PurgeScrollback,
-            Operation::MoveToTopLeft,
+            Operation::MoveUp(1),
+            Operation::CarriageReturn,
+            Operation::InsertLines(1),
+            Operation::ClearLine,
             Operation::Write("top".to_owned()),
-            Operation::Newline,
-            Operation::Write("bottom".to_owned()),
-            Operation::Newline,
+            Operation::CarriageReturn,
+            Operation::MoveDown(2),
+            Operation::ScrollUp(1),
             Operation::Flush,
         ]
     );
@@ -519,7 +520,7 @@ fn multi_line_insert_clears_each_inserted_row_and_restores_sentinel() {
 }
 
 #[test]
-fn insert_that_would_discard_sentinel_falls_back_to_full_redraw() {
+fn insert_that_would_discard_sentinel_scrolls_when_target_remains_visible() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();
     let block = LinesBlock::new(&["top", "bottom"]);
@@ -544,15 +545,14 @@ fn insert_that_would_discard_sentinel_falls_back_to_full_redraw() {
     assert_eq!(
         operations.operations()[7..],
         [
-            Operation::ClearScreen,
-            Operation::PurgeScrollback,
-            Operation::MoveToTopLeft,
-            Operation::Write("top".to_owned()),
-            Operation::Newline,
+            Operation::MoveUp(1),
+            Operation::CarriageReturn,
+            Operation::InsertLines(1),
+            Operation::ClearLine,
             Operation::Write("inserted".to_owned()),
-            Operation::Newline,
-            Operation::Write("bottom".to_owned()),
-            Operation::Newline,
+            Operation::CarriageReturn,
+            Operation::MoveDown(2),
+            Operation::ScrollUp(1),
             Operation::Flush,
         ]
     );
@@ -788,6 +788,54 @@ fn changed_line_plus_trailing_append_appends_before_patching_old_coordinate() {
             Operation::CarriageReturn,
             Operation::ClearLine,
             Operation::Write("new".to_owned()),
+            Operation::CarriageReturn,
+            Operation::MoveDown(3),
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn bottom_row_initial_cursor_can_append_and_patch_visible_prior_line_without_full_redraw() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["one", "two", "three"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 10,
+        },
+        CursorPosition { row: 9, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["one", "TWO", "three", "four"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations(),
+        vec![
+            Operation::HideCursor,
+            Operation::Flush,
+            Operation::Write("one".to_owned()),
+            Operation::Newline,
+            Operation::Write("two".to_owned()),
+            Operation::Newline,
+            Operation::Write("three".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+            Operation::Write("four".to_owned()),
+            Operation::Newline,
+            Operation::MoveUp(3),
+            Operation::CarriageReturn,
+            Operation::ClearLine,
+            Operation::Write("TWO".to_owned()),
             Operation::CarriageReturn,
             Operation::MoveDown(3),
             Operation::Flush,
@@ -2336,7 +2384,7 @@ fn coalesce_merges_adjacent_operations_and_drops_empty_operations() {
 }
 
 #[test]
-fn trailing_append_with_earlier_insert_falls_back_to_full_redraw() {
+fn trailing_append_with_earlier_insert_patches_when_targets_remain_visible() {
     let last_frame = committed_frame(vec!["a".to_owned(), "b".to_owned()], 0, 2);
     let current_frame = vec![
         "x".to_owned(),
@@ -2347,5 +2395,63 @@ fn trailing_append_with_earlier_insert_falls_back_to_full_redraw() {
 
     let plan = plan_frame_render(&last_frame, &current_frame, 24, false);
 
-    assert_eq!(plan, FramePlan::FullRedraw);
+    assert_eq!(
+        plan,
+        FramePlan::ChangedLines(vec![
+            PlannedOperation::Write("c"),
+            PlannedOperation::Newline,
+            PlannedOperation::MoveUp(3),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::InsertLines(1),
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("x"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(4),
+        ])
+    );
+}
+
+#[test]
+fn mixed_structural_patches_do_not_force_full_redraw_when_targets_remain_visible() {
+    let last_frame = committed_frame(
+        vec!["card".to_owned(), "notice".to_owned(), "prompt".to_owned()],
+        0,
+        3,
+    );
+    let current_frame = vec![
+        "expanded card".to_owned(),
+        "details".to_owned(),
+        "notice".to_owned(),
+        "paragraph".to_owned(),
+        "next prompt".to_owned(),
+    ];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 10, false);
+
+    assert_eq!(
+        plan,
+        FramePlan::ChangedLines(vec![
+            PlannedOperation::Write("next prompt"),
+            PlannedOperation::Newline,
+            PlannedOperation::MoveUp(2),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("paragraph"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(2),
+            PlannedOperation::MoveUp(3),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::InsertLines(1),
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("details"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(4),
+            PlannedOperation::MoveUp(5),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("expanded card"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(5),
+        ])
+    );
 }
