@@ -864,6 +864,71 @@ fn changed_line_after_delete_uses_translated_row_and_preserves_view() {
 }
 
 #[test]
+fn viewport_visible_patch_target_below_sentinel_falls_back_to_full_redraw() {
+    let last_frame = committed_frame(
+        vec![
+            "managed".to_owned(),
+            "gap".to_owned(),
+            "old unmanaged".to_owned(),
+        ],
+        0,
+        1,
+    );
+    let current_frame = vec![
+        "managed".to_owned(),
+        "gap".to_owned(),
+        "new unmanaged".to_owned(),
+    ];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 3, false);
+
+    assert_eq!(plan, FramePlan::FullRedraw);
+}
+
+#[test]
+fn invisible_cursor_row_before_patch_movement_falls_back_to_full_redraw() {
+    let last_frame = committed_frame(
+        vec![
+            "old".to_owned(),
+            "stable".to_owned(),
+            "tail".to_owned(),
+            "sentinel".to_owned(),
+        ],
+        0,
+        4,
+    );
+    let current_frame = vec![
+        "new".to_owned(),
+        "stable".to_owned(),
+        "tail".to_owned(),
+        "sentinel".to_owned(),
+    ];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 3, false);
+
+    assert_eq!(plan, FramePlan::FullRedraw);
+}
+
+#[test]
+fn invisible_cursor_row_before_delete_movement_falls_back_to_full_redraw() {
+    let last_frame = committed_frame(
+        vec![
+            "remove one".to_owned(),
+            "remove two".to_owned(),
+            "keep".to_owned(),
+            "tail".to_owned(),
+        ],
+        0,
+        4,
+    );
+    let current_frame = vec!["keep".to_owned(), "tail".to_owned()];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 3, false);
+
+    assert_eq!(plan, FramePlan::FullRedraw);
+}
+
+#[test]
 fn delete_target_above_visible_viewport_falls_back_to_full_redraw() {
     let last_frame = committed_frame(
         ["zero", "one", "two", "three"]
@@ -877,6 +942,25 @@ fn delete_target_above_visible_viewport_falls_back_to_full_redraw() {
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 3, false);
+
+    assert_eq!(plan, FramePlan::FullRedraw);
+}
+
+#[test]
+fn delete_that_would_remove_the_final_sentinel_falls_back_to_full_redraw() {
+    let last_frame = committed_frame(
+        vec![
+            "keep".to_owned(),
+            "remove one".to_owned(),
+            "remove two".to_owned(),
+            "remove three".to_owned(),
+        ],
+        0,
+        2,
+    );
+    let current_frame = vec!["keep".to_owned()];
 
     let plan = plan_frame_render(&last_frame, &current_frame, 3, false);
 
@@ -1089,6 +1173,31 @@ fn multiple_changed_lines_before_trailing_append_track_cursor_without_zero_moves
 }
 
 #[test]
+fn invisible_cursor_row_before_changed_line_plus_append_falls_back_to_full_redraw() {
+    let last_frame = committed_frame(
+        vec![
+            "old".to_owned(),
+            "stable".to_owned(),
+            "tail".to_owned(),
+            "sentinel".to_owned(),
+        ],
+        0,
+        4,
+    );
+    let current_frame = vec![
+        "new".to_owned(),
+        "stable".to_owned(),
+        "tail".to_owned(),
+        "sentinel".to_owned(),
+        "append".to_owned(),
+    ];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 3, false);
+
+    assert_eq!(plan, FramePlan::FullRedraw);
+}
+
+#[test]
 fn append_induced_scroll_patches_initially_visible_target_before_appending() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();
@@ -1159,11 +1268,19 @@ fn append_induced_scroll_patches_initially_visible_target_before_appending() {
 #[test]
 fn multiple_changed_lines_patch_top_down_without_bottom_up_fallback() {
     let last_frame = committed_frame(
-        vec!["old one".to_owned(), "old two".to_owned(), "stable".to_owned()],
+        vec![
+            "old one".to_owned(),
+            "old two".to_owned(),
+            "stable".to_owned(),
+        ],
         0,
         3,
     );
-    let current_frame = vec!["new one".to_owned(), "new two".to_owned(), "stable".to_owned()];
+    let current_frame = vec![
+        "new one".to_owned(),
+        "new two".to_owned(),
+        "stable".to_owned(),
+    ];
 
     let plan = plan_frame_render(&last_frame, &current_frame, 24, false);
 
@@ -1624,6 +1741,62 @@ fn selected_changed_line_operation_failures_are_transactional() {
         );
         assert!(!terminal.needs_full_redraw);
     }
+}
+
+#[test]
+fn structural_planner_operation_failure_is_transactional_and_repairs_with_full_redraw() {
+    let backend = FailOnArmedOperationBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["one", "two", "three"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 24,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["one", "inserted", "two", "three"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    operations.fail_after_successful_operations(2);
+
+    let err = terminal
+        .render()
+        .expect_err("structural planner operation failure should be reported");
+
+    assert!(matches!(err, TerminalError::Backend(OperationFailed)));
+    assert_eq!(
+        terminal.last_committed_frame,
+        committed_frame(
+            vec!["one".to_owned(), "two".to_owned(), "three".to_owned()],
+            0,
+            3,
+        )
+    );
+    assert!(terminal.needs_full_redraw);
+
+    terminal.render().unwrap();
+
+    assert_eq!(
+        terminal.last_committed_frame,
+        committed_frame(
+            vec![
+                "one".to_owned(),
+                "inserted".to_owned(),
+                "two".to_owned(),
+                "three".to_owned(),
+            ],
+            0,
+            4,
+        )
+    );
+    assert!(!terminal.needs_full_redraw);
 }
 
 #[test]

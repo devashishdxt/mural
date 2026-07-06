@@ -1,8 +1,8 @@
 use crate::{Backend, TerminalError};
 
 use super::{
-    diff::{patience_diff, translate_diff_to_patches, DocumentPatch},
-    frame::{frame_changed, is_append_only, CommittedFrame, ViewportState},
+    diff::{DocumentPatch, patience_diff, translate_diff_to_patches},
+    frame::{CommittedFrame, ViewportState, frame_changed, is_append_only},
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -255,6 +255,26 @@ fn row_is_viewport_visible(viewport: ViewportState, row: usize, height: usize) -
     managed_row >= viewport.first_visible_managed_row && visible_row < height as isize
 }
 
+fn can_move_cursor_to_viewport_row(
+    viewport: ViewportState,
+    actual_cursor_row: usize,
+    target_row: usize,
+    height: usize,
+) -> bool {
+    row_is_viewport_visible(viewport, actual_cursor_row, height)
+        && row_is_viewport_visible(viewport, target_row, height)
+}
+
+fn can_move_cursor_to_managed_target(
+    viewport: ViewportState,
+    actual_cursor_row: usize,
+    target_row: usize,
+    height: usize,
+) -> bool {
+    row_is_visible(viewport, target_row, height)
+        && can_move_cursor_to_viewport_row(viewport, actual_cursor_row, target_row, height)
+}
+
 fn plan_append_operations(lines: &[String]) -> Vec<PlannedOperation<'_>> {
     lines
         .iter()
@@ -309,7 +329,7 @@ fn plan_changed_lines_before_trailing_append<'a>(
             unreachable!("changed patches already filtered");
         };
 
-        if !row_is_visible(viewport, *old_row, height) {
+        if !can_move_cursor_to_managed_target(viewport, actual_cursor_row, *old_row, height) {
             return MixedAppendPlan::NeedsFullRedraw;
         }
 
@@ -322,6 +342,14 @@ fn plan_changed_lines_before_trailing_append<'a>(
         operations.push(PlannedOperation::CarriageReturn);
     }
 
+    if !can_move_cursor_to_viewport_row(
+        viewport,
+        actual_cursor_row,
+        viewport.cursor_managed_row,
+        height,
+    ) {
+        return MixedAppendPlan::NeedsFullRedraw;
+    }
     move_cursor_to_managed_row(
         &mut operations,
         &mut actual_cursor_row,
@@ -377,7 +405,12 @@ fn plan_structural_patches_top_down<'a>(
                 let Some(target_row) = old_row_after_delta(*old_row, row_delta) else {
                     return MixedAppendPlan::NeedsFullRedraw;
                 };
-                if !row_is_visible(simulated_viewport, target_row, height) {
+                if !can_move_cursor_to_managed_target(
+                    simulated_viewport,
+                    actual_cursor_row,
+                    target_row,
+                    height,
+                ) {
                     return MixedAppendPlan::NeedsFullRedraw;
                 }
 
@@ -393,7 +426,12 @@ fn plan_structural_patches_top_down<'a>(
                 let Some(target_row) = old_row_after_delta(old.start, row_delta) else {
                     return MixedAppendPlan::NeedsFullRedraw;
                 };
-                if !row_is_visible(simulated_viewport, target_row, height) {
+                if !can_move_cursor_to_managed_target(
+                    simulated_viewport,
+                    actual_cursor_row,
+                    target_row,
+                    height,
+                ) {
                     return MixedAppendPlan::NeedsFullRedraw;
                 }
 
@@ -498,6 +536,14 @@ fn plan_structural_patches_top_down<'a>(
         }
     }
 
+    if !can_move_cursor_to_viewport_row(
+        simulated_viewport,
+        actual_cursor_row,
+        simulated_viewport.cursor_managed_row,
+        height,
+    ) {
+        return MixedAppendPlan::NeedsFullRedraw;
+    }
     move_cursor_to_managed_row(
         &mut operations,
         &mut actual_cursor_row,
