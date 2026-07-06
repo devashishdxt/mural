@@ -217,7 +217,7 @@ fn plan_frame_render_update<'a>(
         MixedAppendPlan::Unsupported => {}
     }
 
-    match plan_deletes_top_down(last_frame.viewport, current_frame, height, &patches) {
+    match plan_structural_patches_top_down(last_frame.viewport, current_frame, height, &patches) {
         MixedAppendPlan::Planned {
             operations,
             viewport,
@@ -356,16 +356,18 @@ fn old_row_after_delta(old_row: usize, row_delta: isize) -> Option<usize> {
     (old_row as isize).checked_add(row_delta)?.try_into().ok()
 }
 
-fn plan_deletes_top_down<'a>(
+fn plan_structural_patches_top_down<'a>(
     viewport: ViewportState,
     current_frame: &'a [String],
     height: usize,
     patches: &[DocumentPatch],
 ) -> MixedAppendPlan<'a> {
-    if !patches
-        .iter()
-        .any(|patch| matches!(patch, DocumentPatch::DeleteLines { .. }))
-    {
+    if !patches.iter().any(|patch| {
+        matches!(
+            patch,
+            DocumentPatch::DeleteLines { .. } | DocumentPatch::InsertLines { .. }
+        )
+    }) {
         return MixedAppendPlan::Unsupported;
     }
 
@@ -423,23 +425,58 @@ fn plan_deletes_top_down<'a>(
             }
             DocumentPatch::InsertLines { old_row, current } => {
                 let Some(target_row) = old_row_after_delta(*old_row, row_delta) else {
-                    return MixedAppendPlan::Unsupported;
+                    return MixedAppendPlan::NeedsFullRedraw;
                 };
-                if index != patches.len() - 1
-                    || target_row != simulated_viewport.cursor_managed_row
-                    || current.end != current_frame.len()
+
+                if target_row == simulated_viewport.cursor_managed_row
+                    && index == patches.len() - 1
+                    && current.end == current_frame.len()
                 {
-                    return MixedAppendPlan::Unsupported;
+                    move_cursor_to_managed_row(
+                        &mut operations,
+                        &mut actual_cursor_row,
+                        simulated_viewport.cursor_managed_row,
+                    );
+                    operations.extend(plan_append_operations(&current_frame[current.clone()]));
+                    simulated_viewport = simulated_viewport.after_newlines(current.len(), height);
+                    actual_cursor_row = simulated_viewport.cursor_managed_row;
+                    row_delta += current.len() as isize;
+                    continue;
                 }
 
-                move_cursor_to_managed_row(
-                    &mut operations,
-                    &mut actual_cursor_row,
-                    simulated_viewport.cursor_managed_row,
-                );
-                operations.extend(plan_append_operations(&current_frame[current.clone()]));
-                simulated_viewport = simulated_viewport.after_newlines(current.len(), height);
-                actual_cursor_row = simulated_viewport.cursor_managed_row;
+                if target_row >= simulated_viewport.cursor_managed_row
+                    || !row_is_visible(simulated_viewport, target_row, height)
+                {
+                    return MixedAppendPlan::NeedsFullRedraw;
+                }
+
+                let Some(final_sentinel_row) = simulated_viewport
+                    .cursor_managed_row
+                    .checked_add(current.len())
+                else {
+                    return MixedAppendPlan::NeedsFullRedraw;
+                };
+                let resulting_viewport =
+                    simulated_viewport.with_cursor_managed_row(final_sentinel_row);
+                if !resulting_viewport.cursor_is_visible(height) {
+                    return MixedAppendPlan::NeedsFullRedraw;
+                }
+
+                move_cursor_to_managed_row(&mut operations, &mut actual_cursor_row, target_row);
+                operations.push(PlannedOperation::CarriageReturn);
+                operations.push(PlannedOperation::InsertLines(current.len()));
+                for (offset, current_row) in current.clone().enumerate() {
+                    if offset > 0 {
+                        operations.push(PlannedOperation::Newline);
+                    }
+                    operations.push(PlannedOperation::ClearLine);
+                    operations.push(PlannedOperation::Write(current_frame[current_row].as_str()));
+                }
+                operations.push(PlannedOperation::CarriageReturn);
+
+                simulated_viewport = resulting_viewport;
+                row_delta += current.len() as isize;
+                actual_cursor_row = target_row + current.len().saturating_sub(1);
             }
         }
     }

@@ -347,7 +347,7 @@ fn full_redraw_resets_viewport_for_short_exact_footprint_and_long_content() {
 }
 
 #[test]
-fn insert_that_pushes_sentinel_below_initial_viewport_scrolls_when_target_remains_visible() {
+fn middle_insert_that_would_push_sentinel_below_viewport_falls_back_to_full_redraw() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();
     let block = LinesBlock::new(&["bottom"]);
@@ -377,14 +377,13 @@ fn insert_that_pushes_sentinel_below_initial_viewport_scrolls_when_target_remain
             Operation::Write("bottom".to_owned()),
             Operation::Newline,
             Operation::Flush,
-            Operation::MoveUp(1),
-            Operation::CarriageReturn,
-            Operation::InsertLines(1),
-            Operation::ClearLine,
+            Operation::ClearScreen,
+            Operation::PurgeScrollback,
+            Operation::MoveToTopLeft,
             Operation::Write("top".to_owned()),
-            Operation::CarriageReturn,
-            Operation::MoveDown(2),
-            Operation::ScrollUp(1),
+            Operation::Newline,
+            Operation::Write("bottom".to_owned()),
+            Operation::Newline,
             Operation::Flush,
         ]
     );
@@ -520,7 +519,7 @@ fn multi_line_insert_clears_each_inserted_row_and_restores_sentinel() {
 }
 
 #[test]
-fn insert_that_would_discard_sentinel_scrolls_when_target_remains_visible() {
+fn middle_insert_that_would_discard_sentinel_falls_back_to_full_redraw() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();
     let block = LinesBlock::new(&["top", "bottom"]);
@@ -545,14 +544,15 @@ fn insert_that_would_discard_sentinel_scrolls_when_target_remains_visible() {
     assert_eq!(
         operations.operations()[7..],
         [
-            Operation::MoveUp(1),
-            Operation::CarriageReturn,
-            Operation::InsertLines(1),
-            Operation::ClearLine,
+            Operation::ClearScreen,
+            Operation::PurgeScrollback,
+            Operation::MoveToTopLeft,
+            Operation::Write("top".to_owned()),
+            Operation::Newline,
             Operation::Write("inserted".to_owned()),
-            Operation::CarriageReturn,
-            Operation::MoveDown(2),
-            Operation::ScrollUp(1),
+            Operation::Newline,
+            Operation::Write("bottom".to_owned()),
+            Operation::Newline,
             Operation::Flush,
         ]
     );
@@ -2588,7 +2588,7 @@ fn coalesce_merges_adjacent_operations_and_drops_empty_operations() {
 }
 
 #[test]
-fn trailing_append_with_earlier_insert_patches_when_targets_remain_visible() {
+fn trailing_append_with_earlier_insert_restores_to_final_sentinel() {
     let last_frame = committed_frame(vec!["a".to_owned(), "b".to_owned()], 0, 2);
     let current_frame = vec![
         "x".to_owned(),
@@ -2602,15 +2602,56 @@ fn trailing_append_with_earlier_insert_patches_when_targets_remain_visible() {
     assert_eq!(
         plan,
         FramePlan::ChangedLines(vec![
+            PlannedOperation::MoveUp(2),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::InsertLines(1),
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("x"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(3),
             PlannedOperation::Write("c"),
             PlannedOperation::Newline,
+        ])
+    );
+}
+
+#[test]
+fn middle_insert_translates_following_changed_line_without_sentinel_round_trip() {
+    let last_frame = committed_frame(
+        vec![
+            "a".to_owned(),
+            "b".to_owned(),
+            "c".to_owned(),
+            "d".to_owned(),
+        ],
+        0,
+        4,
+    );
+    let current_frame = vec![
+        "a".to_owned(),
+        "x".to_owned(),
+        "b".to_owned(),
+        "c2".to_owned(),
+        "d".to_owned(),
+    ];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 8, false);
+
+    assert_eq!(
+        plan,
+        FramePlan::ChangedLines(vec![
             PlannedOperation::MoveUp(3),
             PlannedOperation::CarriageReturn,
             PlannedOperation::InsertLines(1),
             PlannedOperation::ClearLine,
             PlannedOperation::Write("x"),
             PlannedOperation::CarriageReturn,
-            PlannedOperation::MoveDown(4),
+            PlannedOperation::MoveDown(2),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("c2"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(2),
         ])
     );
 }
@@ -2635,27 +2676,25 @@ fn mixed_structural_patches_do_not_force_full_redraw_when_targets_remain_visible
     assert_eq!(
         plan,
         FramePlan::ChangedLines(vec![
-            PlannedOperation::Write("next prompt"),
-            PlannedOperation::Newline,
-            PlannedOperation::MoveUp(2),
+            PlannedOperation::MoveUp(3),
             PlannedOperation::CarriageReturn,
             PlannedOperation::ClearLine,
-            PlannedOperation::Write("paragraph"),
+            PlannedOperation::Write("expanded card"),
             PlannedOperation::CarriageReturn,
-            PlannedOperation::MoveDown(2),
-            PlannedOperation::MoveUp(3),
+            PlannedOperation::MoveDown(1),
             PlannedOperation::CarriageReturn,
             PlannedOperation::InsertLines(1),
             PlannedOperation::ClearLine,
             PlannedOperation::Write("details"),
             PlannedOperation::CarriageReturn,
-            PlannedOperation::MoveDown(4),
-            PlannedOperation::MoveUp(5),
+            PlannedOperation::MoveDown(2),
             PlannedOperation::CarriageReturn,
             PlannedOperation::ClearLine,
-            PlannedOperation::Write("expanded card"),
+            PlannedOperation::Write("paragraph"),
             PlannedOperation::CarriageReturn,
-            PlannedOperation::MoveDown(5),
+            PlannedOperation::MoveDown(1),
+            PlannedOperation::Write("next prompt"),
+            PlannedOperation::Newline,
         ])
     );
 }
