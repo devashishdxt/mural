@@ -12,6 +12,7 @@ categories = ["command-line-interface"]
 
 [dependencies]
 drape = "0.1.0"
+similar = "3"
 termina = "0.3"
 thiserror = "2"
 

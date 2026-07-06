@@ -1,9 +1,10 @@
+use std::ops::Range;
+
+use similar::{Algorithm, DiffOp, capture_diff_slices};
+
 use crate::{Backend, TerminalError};
 
-use super::{
-    diff::{DocumentPatch, patience_diff, translate_diff_to_patches},
-    frame::{CommittedFrame, ViewportState, frame_changed, is_append_only},
-};
+use super::frame::{CommittedFrame, ViewportState, frame_changed, is_append_only};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum PlannedOperation<'a> {
@@ -131,8 +132,8 @@ fn plan_frame_render_update<'a>(
         return PlannedFrameRender::no_changes(last_frame.viewport);
     }
 
-    let patches = translate_diff_to_patches(&patience_diff(&last_frame.lines, current_frame));
-    match plan_structural_patches_top_down(last_frame.viewport, current_frame, height, &patches) {
+    let diff = capture_diff_slices(Algorithm::Patience, &last_frame.lines, current_frame);
+    match plan_structural_patches_top_down(last_frame.viewport, current_frame, height, &diff) {
         PatchPlan::Planned {
             operations,
             viewport,
@@ -223,7 +224,7 @@ struct PatchPlanner<'a> {
     viewport: ViewportState,
     actual_cursor_row: usize,
     row_delta: isize,
-    trailing_append_ranges: Vec<std::ops::Range<usize>>,
+    trailing_append_ranges: Vec<Range<usize>>,
 }
 
 impl<'a> PatchPlanner<'a> {
@@ -239,14 +240,26 @@ impl<'a> PatchPlanner<'a> {
         }
     }
 
-    fn plan_patch(&mut self, patch: &DocumentPatch) -> PatchPlanningResult<()> {
+    fn plan_patch(&mut self, patch: DiffOp) -> PatchPlanningResult<()> {
         match patch {
-            DocumentPatch::ChangedLine {
-                old_row,
-                current_row,
-            } => self.plan_changed_line(*old_row, *current_row),
-            DocumentPatch::DeleteLines { old } => self.plan_delete(old),
-            DocumentPatch::InsertLines { old_row, current } => self.plan_insert(*old_row, current),
+            DiffOp::Equal { .. } => Ok(()),
+            DiffOp::Delete {
+                old_index, old_len, ..
+            } => self.plan_delete(old_index..old_index + old_len),
+            DiffOp::Insert {
+                old_index,
+                new_index,
+                new_len,
+            } => self.plan_insert(old_index, new_index..new_index + new_len),
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => self.plan_replace(
+                old_index..old_index + old_len,
+                new_index..new_index + new_len,
+            ),
         }
     }
 
@@ -316,7 +329,29 @@ impl<'a> PatchPlanner<'a> {
         Ok(())
     }
 
-    fn plan_delete(&mut self, old: &std::ops::Range<usize>) -> PatchPlanningResult<()> {
+    fn plan_replace(
+        &mut self,
+        old: Range<usize>,
+        current: Range<usize>,
+    ) -> PatchPlanningResult<()> {
+        let changed_line_count = old.len().min(current.len());
+        for offset in 0..changed_line_count {
+            self.plan_changed_line(old.start + offset, current.start + offset)?;
+        }
+
+        if current.len() > changed_line_count {
+            self.plan_insert(
+                old.start + changed_line_count,
+                current.start + changed_line_count..current.end,
+            )?;
+        } else if old.len() > changed_line_count {
+            self.plan_delete(old.start + changed_line_count..old.end)?;
+        }
+
+        Ok(())
+    }
+
+    fn plan_delete(&mut self, old: Range<usize>) -> PatchPlanningResult<()> {
         let target_row = self.translated_old_row(old.start)?;
         self.ensure_managed_target_reachable(target_row)?;
 
@@ -342,15 +377,11 @@ impl<'a> PatchPlanner<'a> {
         Ok(())
     }
 
-    fn plan_insert(
-        &mut self,
-        old_row: usize,
-        current: &std::ops::Range<usize>,
-    ) -> PatchPlanningResult<()> {
+    fn plan_insert(&mut self, old_row: usize, current: Range<usize>) -> PatchPlanningResult<()> {
         let target_row = self.translated_old_row(old_row)?;
 
         if target_row == self.viewport.cursor_managed_row {
-            self.trailing_append_ranges.push(current.clone());
+            self.trailing_append_ranges.push(current);
             return Ok(());
         }
 
@@ -474,15 +505,15 @@ fn plan_structural_patches_top_down<'a>(
     viewport: ViewportState,
     current_frame: &'a [String],
     height: usize,
-    patches: &[DocumentPatch],
+    diff: &[DiffOp],
 ) -> PatchPlan<'a> {
-    if patches.is_empty() {
+    if diff.is_empty() {
         return PatchPlan::Unsupported;
     }
 
     let mut planner = PatchPlanner::new(viewport, current_frame, height);
-    for patch in patches {
-        if planner.plan_patch(patch).is_err() {
+    for patch in diff {
+        if planner.plan_patch(*patch).is_err() {
             return PatchPlan::NeedsFullRedraw;
         }
     }
@@ -540,22 +571,26 @@ mod tests {
             "tail one".to_owned(),
             "tail two".to_owned(),
         ];
-        let patches = vec![
-            DocumentPatch::ChangedLine {
-                old_row: 0,
-                current_row: 0,
+        let diff = vec![
+            DiffOp::Replace {
+                old_index: 0,
+                old_len: 1,
+                new_index: 0,
+                new_len: 1,
             },
-            DocumentPatch::InsertLines {
-                old_row: 2,
-                current: 2..3,
+            DiffOp::Insert {
+                old_index: 2,
+                new_index: 2,
+                new_len: 1,
             },
-            DocumentPatch::InsertLines {
-                old_row: 2,
-                current: 3..4,
+            DiffOp::Insert {
+                old_index: 2,
+                new_index: 3,
+                new_len: 1,
             },
         ];
 
-        let plan = plan_structural_patches_top_down(viewport, &current_frame, 10, &patches);
+        let plan = plan_structural_patches_top_down(viewport, &current_frame, 10, &diff);
 
         let PatchPlan::Planned {
             operations,

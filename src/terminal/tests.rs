@@ -1,9 +1,6 @@
 use std::borrow::Cow;
 
 use super::{
-    diff::{
-        DiffOp, DocumentPatch, coalesce_diff_operations, patience_diff, translate_diff_to_patches,
-    },
     frame::{CommittedFrame, ViewportState},
     rendering::{FramePlan, PlannedOperation, plan_frame_render},
     *,
@@ -1413,57 +1410,50 @@ fn changed_line_commit_clones_borrowed_frame_after_successful_patch() {
 }
 
 #[test]
-fn patience_diff_uses_unique_anchors_and_translates_replacements_with_tails() {
-    let old = vec!["header", "keep", "old one", "old two", "footer"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    let current = vec![
-        "header",
-        "keep",
-        "new one",
-        "new two",
-        "new three",
-        "footer",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect::<Vec<_>>();
-
-    let diff = patience_diff(&old, &current);
-    let patches = translate_diff_to_patches(&diff);
-
-    assert_eq!(
-        diff,
+fn replacement_with_extra_current_tail_updates_changed_lines_then_inserts_tail() {
+    let last_frame = committed_frame(
         vec![
-            DiffOp::Equal {
-                old: 0..2,
-                current: 0..2,
-            },
-            DiffOp::Delete { old: 2..4 },
-            DiffOp::Insert { current: 2..5 },
-            DiffOp::Equal {
-                old: 4..5,
-                current: 5..6,
-            },
-        ]
+            "header".to_owned(),
+            "keep".to_owned(),
+            "old one".to_owned(),
+            "old two".to_owned(),
+            "footer".to_owned(),
+        ],
+        0,
+        5,
     );
+    let current_frame = vec![
+        "header".to_owned(),
+        "keep".to_owned(),
+        "new one".to_owned(),
+        "new two".to_owned(),
+        "new three".to_owned(),
+        "footer".to_owned(),
+    ];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 24, false);
+
     assert_eq!(
-        patches,
-        vec![
-            DocumentPatch::ChangedLine {
-                old_row: 2,
-                current_row: 2,
-            },
-            DocumentPatch::ChangedLine {
-                old_row: 3,
-                current_row: 3,
-            },
-            DocumentPatch::InsertLines {
-                old_row: 4,
-                current: 4..5,
-            },
-        ]
+        plan,
+        FramePlan::ChangedLines(vec![
+            PlannedOperation::MoveUp(3),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("new one"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(1),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("new two"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(1),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::InsertLines(1),
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("new three"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(2),
+        ])
     );
 }
 
@@ -2725,119 +2715,41 @@ fn pinned_mutation_and_removal_update_only_pinned_region() {
 }
 
 #[test]
-fn replacement_with_shorter_current_translates_trailing_delete() {
-    let patches = translate_diff_to_patches(&[
-        DiffOp::Delete { old: 2..5 },
-        DiffOp::Insert { current: 2..3 },
-    ]);
-
-    assert_eq!(
-        patches,
+fn replacement_with_shorter_current_updates_changed_line_then_deletes_tail() {
+    let last_frame = committed_frame(
         vec![
-            DocumentPatch::ChangedLine {
-                old_row: 2,
-                current_row: 2,
-            },
-            DocumentPatch::DeleteLines { old: 3..5 },
-        ]
+            "header".to_owned(),
+            "keep".to_owned(),
+            "old one".to_owned(),
+            "old two".to_owned(),
+            "old three".to_owned(),
+            "footer".to_owned(),
+        ],
+        0,
+        6,
     );
-}
+    let current_frame = vec![
+        "header".to_owned(),
+        "keep".to_owned(),
+        "new one".to_owned(),
+        "footer".to_owned(),
+    ];
 
-#[test]
-fn insertion_old_row_skips_prior_insert_operations() {
-    let patches = translate_diff_to_patches(&[
-        DiffOp::Equal {
-            old: 0..1,
-            current: 0..1,
-        },
-        DiffOp::Insert { current: 1..2 },
-        DiffOp::Insert { current: 2..3 },
-    ]);
+    let plan = plan_frame_render(&last_frame, &current_frame, 24, false);
 
     assert_eq!(
-        patches,
-        vec![
-            DocumentPatch::InsertLines {
-                old_row: 1,
-                current: 1..2,
-            },
-            DocumentPatch::InsertLines {
-                old_row: 1,
-                current: 2..3,
-            },
-        ]
-    );
-}
-
-#[test]
-fn patience_diff_ignores_duplicate_candidates_and_keeps_increasing_anchors() {
-    let old = vec!["x", "repeat", "repeat", "current-dup", "a", "b", "old-tail"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    let current = vec![
-        "y",
-        "repeat",
-        "current-dup",
-        "current-dup",
-        "a",
-        "b",
-        "new-tail",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect::<Vec<_>>();
-
-    let diff = patience_diff(&old, &current);
-
-    assert_eq!(
-        diff,
-        vec![
-            DiffOp::Delete { old: 0..3 },
-            DiffOp::Insert { current: 0..3 },
-            DiffOp::Equal {
-                old: 3..6,
-                current: 3..6,
-            },
-            DiffOp::Delete { old: 6..7 },
-            DiffOp::Insert { current: 6..7 },
-        ]
-    );
-}
-
-#[test]
-fn coalesce_merges_adjacent_operations_and_drops_empty_operations() {
-    let diff = coalesce_diff_operations(vec![
-        DiffOp::Equal {
-            old: 0..0,
-            current: 0..0,
-        },
-        DiffOp::Equal {
-            old: 0..1,
-            current: 0..1,
-        },
-        DiffOp::Equal {
-            old: 1..2,
-            current: 1..2,
-        },
-        DiffOp::Delete { old: 2..2 },
-        DiffOp::Delete { old: 2..3 },
-        DiffOp::Delete { old: 3..4 },
-        DiffOp::Insert { current: 2..2 },
-        DiffOp::Insert { current: 2..3 },
-        DiffOp::Insert { current: 3..4 },
-    ]);
-
-    assert_eq!(
-        diff,
-        vec![
-            DiffOp::Equal {
-                old: 0..2,
-                current: 0..2,
-            },
-            DiffOp::Delete { old: 2..4 },
-            DiffOp::Insert { current: 2..4 },
-        ]
+        plan,
+        FramePlan::ChangedLines(vec![
+            PlannedOperation::MoveUp(4),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("new one"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(1),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::DeleteLines(2),
+            PlannedOperation::MoveDown(1),
+        ])
     );
 }
 

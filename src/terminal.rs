@@ -1,4 +1,3 @@
-mod diff;
 mod frame;
 mod rendering;
 
