@@ -1,8 +1,8 @@
 use crate::{Backend, TerminalError};
 
 use super::{
-    diff::{DocumentPatch, patience_diff, translate_diff_to_patches},
-    frame::{CommittedFrame, ViewportState, frame_changed, is_append_only},
+    diff::{patience_diff, translate_diff_to_patches, DocumentPatch},
+    frame::{frame_changed, is_append_only, CommittedFrame, ViewportState},
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -366,8 +366,9 @@ fn plan_structural_patches_top_down<'a>(
     let mut simulated_viewport = viewport;
     let mut actual_cursor_row = viewport.cursor_managed_row;
     let mut row_delta = 0;
+    let mut trailing_append_ranges = Vec::new();
 
-    for (index, patch) in patches.iter().enumerate() {
+    for patch in patches {
         match patch {
             DocumentPatch::ChangedLine {
                 old_row,
@@ -419,19 +420,8 @@ fn plan_structural_patches_top_down<'a>(
                     return MixedAppendPlan::NeedsFullRedraw;
                 };
 
-                if target_row == simulated_viewport.cursor_managed_row
-                    && index == patches.len() - 1
-                    && current.end == current_frame.len()
-                {
-                    move_cursor_to_managed_row(
-                        &mut operations,
-                        &mut actual_cursor_row,
-                        simulated_viewport.cursor_managed_row,
-                    );
-                    operations.extend(plan_append_operations(&current_frame[current.clone()]));
-                    simulated_viewport = simulated_viewport.after_newlines(current.len(), height);
-                    actual_cursor_row = simulated_viewport.cursor_managed_row;
-                    row_delta += current.len() as isize;
+                if target_row == simulated_viewport.cursor_managed_row {
+                    trailing_append_ranges.push(current.clone());
                     continue;
                 }
 
@@ -514,6 +504,18 @@ fn plan_structural_patches_top_down<'a>(
         simulated_viewport.cursor_managed_row,
     );
 
+    if !trailing_append_ranges.is_empty() {
+        trailing_append_ranges.sort_by_key(|range| range.start);
+        let appended_len = trailing_append_ranges
+            .iter()
+            .map(std::ops::Range::len)
+            .sum();
+        for range in trailing_append_ranges {
+            operations.extend(plan_append_operations(&current_frame[range]));
+        }
+        simulated_viewport = simulated_viewport.after_newlines(appended_len, height);
+    }
+
     MixedAppendPlan::Planned {
         operations,
         viewport: simulated_viewport,
@@ -552,4 +554,69 @@ fn render_full_frame<B: Backend>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structural_planner_coalesces_multiple_trailing_append_ranges_at_final_sentinel() {
+        let viewport = ViewportState {
+            first_visible_managed_row: 0,
+            cursor_managed_row: 2,
+        };
+        let current_frame = vec![
+            "new".to_owned(),
+            "stable".to_owned(),
+            "tail one".to_owned(),
+            "tail two".to_owned(),
+        ];
+        let patches = vec![
+            DocumentPatch::ChangedLine {
+                old_row: 0,
+                current_row: 0,
+            },
+            DocumentPatch::InsertLines {
+                old_row: 2,
+                current: 2..3,
+            },
+            DocumentPatch::InsertLines {
+                old_row: 2,
+                current: 3..4,
+            },
+        ];
+
+        let plan = plan_structural_patches_top_down(viewport, &current_frame, 10, &patches);
+
+        let MixedAppendPlan::Planned {
+            operations,
+            viewport,
+        } = plan
+        else {
+            panic!("expected incremental plan");
+        };
+        assert_eq!(
+            operations,
+            vec![
+                PlannedOperation::MoveUp(2),
+                PlannedOperation::CarriageReturn,
+                PlannedOperation::ClearLine,
+                PlannedOperation::Write("new"),
+                PlannedOperation::CarriageReturn,
+                PlannedOperation::MoveDown(2),
+                PlannedOperation::Write("tail one"),
+                PlannedOperation::Newline,
+                PlannedOperation::Write("tail two"),
+                PlannedOperation::Newline,
+            ]
+        );
+        assert_eq!(
+            viewport,
+            ViewportState {
+                first_visible_managed_row: 0,
+                cursor_managed_row: 4,
+            }
+        );
+    }
 }
