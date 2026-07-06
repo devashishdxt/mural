@@ -1157,6 +1157,35 @@ fn append_induced_scroll_patches_initially_visible_target_before_appending() {
 }
 
 #[test]
+fn multiple_changed_lines_patch_top_down_without_bottom_up_fallback() {
+    let last_frame = committed_frame(
+        vec!["old one".to_owned(), "old two".to_owned(), "stable".to_owned()],
+        0,
+        3,
+    );
+    let current_frame = vec!["new one".to_owned(), "new two".to_owned(), "stable".to_owned()];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 24, false);
+
+    assert_eq!(
+        plan,
+        FramePlan::ChangedLines(vec![
+            PlannedOperation::MoveUp(3),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("new one"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(1),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("new two"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(2),
+        ])
+    );
+}
+
+#[test]
 fn shorter_changed_line_is_cleared_before_replacement_text() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();
