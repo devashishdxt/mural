@@ -26,87 +26,20 @@ pub(super) enum FramePlan<'a> {
     FullRedraw,
 }
 
-#[derive(Clone, Copy)]
-enum PlannedOperationKind {
-    VerticalMove,
-    CursorControl,
-    LineEdit,
-    Write,
-}
-
 impl PlannedOperation<'_> {
     fn execute<B: Backend>(&self, backend: &mut B) -> Result<(), TerminalError<B::Error>> {
-        match self.kind() {
-            PlannedOperationKind::VerticalMove => self.execute_vertical_move(backend),
-            PlannedOperationKind::CursorControl => self.execute_cursor_control(backend),
-            PlannedOperationKind::LineEdit => self.execute_line_edit(backend),
-            PlannedOperationKind::Write => self.execute_write(backend),
-        }
-    }
-
-    fn kind(&self) -> PlannedOperationKind {
-        match self {
-            PlannedOperation::MoveUp(_) | PlannedOperation::MoveDown(_) => {
-                PlannedOperationKind::VerticalMove
-            }
-            PlannedOperation::CarriageReturn | PlannedOperation::Newline => {
-                PlannedOperationKind::CursorControl
-            }
-            PlannedOperation::ClearLine
-            | PlannedOperation::InsertLines(_)
-            | PlannedOperation::DeleteLines(_)
-            | PlannedOperation::ScrollUp(_) => PlannedOperationKind::LineEdit,
-            PlannedOperation::Write(_) => PlannedOperationKind::Write,
-        }
-    }
-
-    fn execute_vertical_move<B: Backend>(
-        &self,
-        backend: &mut B,
-    ) -> Result<(), TerminalError<B::Error>> {
         match self {
             PlannedOperation::MoveUp(count) => backend.move_up(*count)?,
             PlannedOperation::MoveDown(count) => backend.move_down(*count)?,
-            _ => unreachable!("vertical-move operation expected"),
-        }
-
-        Ok(())
-    }
-
-    fn execute_cursor_control<B: Backend>(
-        &self,
-        backend: &mut B,
-    ) -> Result<(), TerminalError<B::Error>> {
-        match self {
             PlannedOperation::CarriageReturn => backend.carriage_return()?,
-            PlannedOperation::Newline => backend.newline()?,
-            _ => unreachable!("cursor-control operation expected"),
-        }
-
-        Ok(())
-    }
-
-    fn execute_line_edit<B: Backend>(
-        &self,
-        backend: &mut B,
-    ) -> Result<(), TerminalError<B::Error>> {
-        match self {
             PlannedOperation::ClearLine => backend.clear_line()?,
             PlannedOperation::InsertLines(count) => backend.insert_lines(*count)?,
             PlannedOperation::DeleteLines(count) => backend.delete_lines(*count)?,
             PlannedOperation::ScrollUp(count) => backend.scroll_up(*count)?,
-            _ => unreachable!("line-edit operation expected"),
+            PlannedOperation::Write(line) => backend.write_str(line)?,
+            PlannedOperation::Newline => backend.newline()?,
         }
 
-        Ok(())
-    }
-
-    fn execute_write<B: Backend>(&self, backend: &mut B) -> Result<(), TerminalError<B::Error>> {
-        let PlannedOperation::Write(line) = self else {
-            unreachable!("write operation expected");
-        };
-
-        backend.write_str(line)?;
         Ok(())
     }
 }
@@ -199,35 +132,17 @@ fn plan_frame_render_update<'a>(
     }
 
     let patches = translate_diff_to_patches(&patience_diff(&last_frame.lines, current_frame));
-    match plan_changed_lines_before_trailing_append(
-        last_frame.viewport,
-        current_frame,
-        height,
-        &patches,
-    ) {
-        MixedAppendPlan::Planned {
-            operations,
-            viewport,
-        } => {
-            return PlannedFrameRender::changed_lines(operations, viewport);
-        }
-        MixedAppendPlan::NeedsFullRedraw => {
-            return PlannedFrameRender::full_redraw(current_frame.len(), height);
-        }
-        MixedAppendPlan::Unsupported => {}
-    }
-
     match plan_structural_patches_top_down(last_frame.viewport, current_frame, height, &patches) {
-        MixedAppendPlan::Planned {
+        PatchPlan::Planned {
             operations,
             viewport,
         } => {
             return PlannedFrameRender::changed_lines(operations, viewport);
         }
-        MixedAppendPlan::NeedsFullRedraw => {
+        PatchPlan::NeedsFullRedraw => {
             return PlannedFrameRender::full_redraw(current_frame.len(), height);
         }
-        MixedAppendPlan::Unsupported => {}
+        PatchPlan::Unsupported => {}
     }
 
     PlannedFrameRender::full_redraw(current_frame.len(), height)
@@ -287,7 +202,7 @@ fn plan_append_operations(lines: &[String]) -> Vec<PlannedOperation<'_>> {
         .collect()
 }
 
-enum MixedAppendPlan<'a> {
+enum PatchPlan<'a> {
     Planned {
         operations: Vec<PlannedOperation<'a>>,
         viewport: ViewportState,
@@ -296,70 +211,249 @@ enum MixedAppendPlan<'a> {
     Unsupported,
 }
 
-fn plan_changed_lines_before_trailing_append<'a>(
-    viewport: ViewportState,
+#[derive(Debug)]
+struct PatchPlanningFailed;
+
+type PatchPlanningResult<T> = Result<T, PatchPlanningFailed>;
+
+struct PatchPlanner<'a> {
     current_frame: &'a [String],
     height: usize,
-    patches: &[DocumentPatch],
-) -> MixedAppendPlan<'a> {
-    let Some((DocumentPatch::InsertLines { old_row, current }, changed_patches)) =
-        patches.split_last()
-    else {
-        return MixedAppendPlan::Unsupported;
-    };
+    operations: Vec<PlannedOperation<'a>>,
+    viewport: ViewportState,
+    actual_cursor_row: usize,
+    row_delta: isize,
+    trailing_append_ranges: Vec<std::ops::Range<usize>>,
+}
 
-    if *old_row != viewport.cursor_managed_row
-        || current.end != current_frame.len()
-        || changed_patches.is_empty()
-        || !changed_patches
-            .iter()
-            .all(|patch| matches!(patch, DocumentPatch::ChangedLine { .. }))
-    {
-        return MixedAppendPlan::Unsupported;
+impl<'a> PatchPlanner<'a> {
+    fn new(viewport: ViewportState, current_frame: &'a [String], height: usize) -> Self {
+        Self {
+            current_frame,
+            height,
+            operations: Vec::new(),
+            viewport,
+            actual_cursor_row: viewport.cursor_managed_row,
+            row_delta: 0,
+            trailing_append_ranges: Vec::new(),
+        }
     }
 
-    let mut operations = Vec::new();
-    let mut actual_cursor_row = viewport.cursor_managed_row;
-    for patch in changed_patches {
-        let DocumentPatch::ChangedLine {
-            old_row,
-            current_row,
-        } = patch
-        else {
-            unreachable!("changed patches already filtered");
-        };
+    fn plan_patch(&mut self, patch: &DocumentPatch) -> PatchPlanningResult<()> {
+        match patch {
+            DocumentPatch::ChangedLine {
+                old_row,
+                current_row,
+            } => self.plan_changed_line(*old_row, *current_row),
+            DocumentPatch::DeleteLines { old } => self.plan_delete(old),
+            DocumentPatch::InsertLines { old_row, current } => self.plan_insert(*old_row, current),
+        }
+    }
 
-        if !can_move_cursor_to_managed_target(viewport, actual_cursor_row, *old_row, height) {
-            return MixedAppendPlan::NeedsFullRedraw;
+    fn finish(mut self) -> PatchPlanningResult<PatchPlan<'a>> {
+        self.return_to_sentinel()?;
+        self.append_trailing_ranges();
+
+        Ok(PatchPlan::Planned {
+            operations: self.operations,
+            viewport: self.viewport,
+        })
+    }
+
+    fn translated_old_row(&self, old_row: usize) -> PatchPlanningResult<usize> {
+        (old_row as isize)
+            .checked_add(self.row_delta)
+            .and_then(|row| row.try_into().ok())
+            .ok_or(PatchPlanningFailed)
+    }
+
+    fn ensure_managed_target_reachable(&self, target_row: usize) -> PatchPlanningResult<()> {
+        if can_move_cursor_to_managed_target(
+            self.viewport,
+            self.actual_cursor_row,
+            target_row,
+            self.height,
+        ) {
+            Ok(())
+        } else {
+            Err(PatchPlanningFailed)
+        }
+    }
+
+    fn ensure_viewport_target_reachable(&self, target_row: usize) -> PatchPlanningResult<()> {
+        if can_move_cursor_to_viewport_row(
+            self.viewport,
+            self.actual_cursor_row,
+            target_row,
+            self.height,
+        ) {
+            Ok(())
+        } else {
+            Err(PatchPlanningFailed)
+        }
+    }
+
+    fn move_to(&mut self, target_row: usize) {
+        move_cursor_to_managed_row(
+            &mut self.operations,
+            &mut self.actual_cursor_row,
+            target_row,
+        );
+    }
+
+    fn plan_changed_line(&mut self, old_row: usize, current_row: usize) -> PatchPlanningResult<()> {
+        let target_row = self.translated_old_row(old_row)?;
+        self.ensure_managed_target_reachable(target_row)?;
+
+        self.move_to(target_row);
+        self.operations.push(PlannedOperation::CarriageReturn);
+        self.operations.push(PlannedOperation::ClearLine);
+        self.operations.push(PlannedOperation::Write(
+            self.current_frame[current_row].as_str(),
+        ));
+        self.operations.push(PlannedOperation::CarriageReturn);
+
+        Ok(())
+    }
+
+    fn plan_delete(&mut self, old: &std::ops::Range<usize>) -> PatchPlanningResult<()> {
+        let target_row = self.translated_old_row(old.start)?;
+        self.ensure_managed_target_reachable(target_row)?;
+
+        let final_sentinel_row = self
+            .viewport
+            .cursor_managed_row
+            .checked_sub(old.len())
+            .ok_or(PatchPlanningFailed)?;
+        if target_row > final_sentinel_row {
+            return Err(PatchPlanningFailed);
         }
 
-        move_cursor_to_managed_row(&mut operations, &mut actual_cursor_row, *old_row);
-        operations.push(PlannedOperation::CarriageReturn);
-        operations.push(PlannedOperation::ClearLine);
-        operations.push(PlannedOperation::Write(
-            current_frame[*current_row].as_str(),
-        ));
-        operations.push(PlannedOperation::CarriageReturn);
+        self.move_to(target_row);
+        self.operations.push(PlannedOperation::CarriageReturn);
+        self.operations
+            .push(PlannedOperation::DeleteLines(old.len()));
+        self.viewport = self.viewport.with_cursor_managed_row(final_sentinel_row);
+        if !self.viewport.cursor_is_visible(self.height) {
+            return Err(PatchPlanningFailed);
+        }
+        self.row_delta -= old.len() as isize;
+
+        Ok(())
     }
 
-    if !can_move_cursor_to_viewport_row(
-        viewport,
-        actual_cursor_row,
-        viewport.cursor_managed_row,
-        height,
-    ) {
-        return MixedAppendPlan::NeedsFullRedraw;
-    }
-    move_cursor_to_managed_row(
-        &mut operations,
-        &mut actual_cursor_row,
-        viewport.cursor_managed_row,
-    );
-    operations.extend(plan_append_operations(&current_frame[current.clone()]));
+    fn plan_insert(
+        &mut self,
+        old_row: usize,
+        current: &std::ops::Range<usize>,
+    ) -> PatchPlanningResult<()> {
+        let target_row = self.translated_old_row(old_row)?;
 
-    MixedAppendPlan::Planned {
-        operations,
-        viewport: viewport.after_newlines(current.len(), height),
+        if target_row == self.viewport.cursor_managed_row {
+            self.trailing_append_ranges.push(current.clone());
+            return Ok(());
+        }
+
+        if target_row >= self.viewport.cursor_managed_row
+            || !row_is_visible(self.viewport, target_row, self.height)
+        {
+            return Err(PatchPlanningFailed);
+        }
+
+        let mut next_target_row = target_row;
+        let mut next_current_row = current.start;
+        while next_current_row < current.end {
+            self.ensure_viewport_target_reachable(next_target_row)?;
+
+            let chunk_len = self.safe_insert_chunk_len(current.end - next_current_row)?;
+            let final_sentinel_row = self
+                .viewport
+                .cursor_managed_row
+                .checked_add(chunk_len)
+                .ok_or(PatchPlanningFailed)?;
+
+            self.plan_insert_chunk(next_target_row, next_current_row, chunk_len);
+            self.viewport = self.viewport.with_cursor_managed_row(final_sentinel_row);
+            self.row_delta += chunk_len as isize;
+            next_target_row += chunk_len;
+            next_current_row += chunk_len;
+
+            self.scroll_up_to_reveal_cursor()?;
+        }
+
+        Ok(())
+    }
+
+    fn safe_insert_chunk_len(&self, remaining: usize) -> PatchPlanningResult<usize> {
+        let bottom_visible_row =
+            self.viewport.first_visible_managed_row + self.height.saturating_sub(1) as isize;
+        let safe_capacity = bottom_visible_row - self.viewport.cursor_managed_row as isize + 1;
+
+        if safe_capacity <= 0 {
+            return Err(PatchPlanningFailed);
+        }
+
+        Ok(remaining.min(safe_capacity as usize))
+    }
+
+    fn plan_insert_chunk(&mut self, target_row: usize, current_start: usize, chunk_len: usize) {
+        self.move_to(target_row);
+        self.operations.push(PlannedOperation::CarriageReturn);
+        self.operations
+            .push(PlannedOperation::InsertLines(chunk_len));
+
+        for offset in 0..chunk_len {
+            if offset > 0 {
+                self.operations.push(PlannedOperation::Newline);
+            }
+            let current_row = current_start + offset;
+            self.operations.push(PlannedOperation::ClearLine);
+            self.operations.push(PlannedOperation::Write(
+                self.current_frame[current_row].as_str(),
+            ));
+        }
+        self.operations.push(PlannedOperation::CarriageReturn);
+
+        self.actual_cursor_row = target_row + chunk_len.saturating_sub(1);
+    }
+
+    fn scroll_up_to_reveal_cursor(&mut self) -> PatchPlanningResult<()> {
+        let scroll_up_count = scroll_up_count_to_reveal_cursor(self.viewport, self.height);
+        if scroll_up_count == 0 {
+            return Ok(());
+        }
+
+        self.operations
+            .push(PlannedOperation::ScrollUp(scroll_up_count));
+        self.viewport.first_visible_managed_row += scroll_up_count as isize;
+        self.actual_cursor_row = self
+            .actual_cursor_row
+            .checked_add(scroll_up_count)
+            .ok_or(PatchPlanningFailed)?;
+
+        Ok(())
+    }
+
+    fn return_to_sentinel(&mut self) -> PatchPlanningResult<()> {
+        self.ensure_viewport_target_reachable(self.viewport.cursor_managed_row)?;
+        self.move_to(self.viewport.cursor_managed_row);
+        Ok(())
+    }
+
+    fn append_trailing_ranges(&mut self) {
+        if self.trailing_append_ranges.is_empty() {
+            return;
+        }
+
+        let mut ranges = std::mem::take(&mut self.trailing_append_ranges);
+        ranges.sort_by_key(|range| range.start);
+
+        let appended_len = ranges.iter().map(std::ops::Range::len).sum();
+        for range in ranges {
+            self.operations
+                .extend(plan_append_operations(&self.current_frame[range]));
+        }
+        self.viewport = self.viewport.after_newlines(appended_len, self.height);
     }
 }
 
@@ -376,196 +470,24 @@ fn move_cursor_to_managed_row(
     *actual_cursor_row = target_row;
 }
 
-fn old_row_after_delta(old_row: usize, row_delta: isize) -> Option<usize> {
-    (old_row as isize).checked_add(row_delta)?.try_into().ok()
-}
-
 fn plan_structural_patches_top_down<'a>(
     viewport: ViewportState,
     current_frame: &'a [String],
     height: usize,
     patches: &[DocumentPatch],
-) -> MixedAppendPlan<'a> {
+) -> PatchPlan<'a> {
     if patches.is_empty() {
-        return MixedAppendPlan::Unsupported;
+        return PatchPlan::Unsupported;
     }
 
-    let mut operations = Vec::new();
-    let mut simulated_viewport = viewport;
-    let mut actual_cursor_row = viewport.cursor_managed_row;
-    let mut row_delta = 0;
-    let mut trailing_append_ranges = Vec::new();
-
+    let mut planner = PatchPlanner::new(viewport, current_frame, height);
     for patch in patches {
-        match patch {
-            DocumentPatch::ChangedLine {
-                old_row,
-                current_row,
-            } => {
-                let Some(target_row) = old_row_after_delta(*old_row, row_delta) else {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                };
-                if !can_move_cursor_to_managed_target(
-                    simulated_viewport,
-                    actual_cursor_row,
-                    target_row,
-                    height,
-                ) {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                }
-
-                move_cursor_to_managed_row(&mut operations, &mut actual_cursor_row, target_row);
-                operations.push(PlannedOperation::CarriageReturn);
-                operations.push(PlannedOperation::ClearLine);
-                operations.push(PlannedOperation::Write(
-                    current_frame[*current_row].as_str(),
-                ));
-                operations.push(PlannedOperation::CarriageReturn);
-            }
-            DocumentPatch::DeleteLines { old } => {
-                let Some(target_row) = old_row_after_delta(old.start, row_delta) else {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                };
-                if !can_move_cursor_to_managed_target(
-                    simulated_viewport,
-                    actual_cursor_row,
-                    target_row,
-                    height,
-                ) {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                }
-
-                let Some(final_sentinel_row) =
-                    simulated_viewport.cursor_managed_row.checked_sub(old.len())
-                else {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                };
-                if target_row > final_sentinel_row {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                }
-
-                move_cursor_to_managed_row(&mut operations, &mut actual_cursor_row, target_row);
-                operations.push(PlannedOperation::CarriageReturn);
-                operations.push(PlannedOperation::DeleteLines(old.len()));
-                simulated_viewport = simulated_viewport.with_cursor_managed_row(final_sentinel_row);
-                if !simulated_viewport.cursor_is_visible(height) {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                }
-                row_delta -= old.len() as isize;
-            }
-            DocumentPatch::InsertLines { old_row, current } => {
-                let Some(target_row) = old_row_after_delta(*old_row, row_delta) else {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                };
-
-                if target_row == simulated_viewport.cursor_managed_row {
-                    trailing_append_ranges.push(current.clone());
-                    continue;
-                }
-
-                if target_row >= simulated_viewport.cursor_managed_row
-                    || !row_is_visible(simulated_viewport, target_row, height)
-                {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                }
-
-                let mut next_target_row = target_row;
-                let mut next_current_row = current.start;
-                while next_current_row < current.end {
-                    if !row_is_viewport_visible(simulated_viewport, actual_cursor_row, height)
-                        || !row_is_viewport_visible(simulated_viewport, next_target_row, height)
-                    {
-                        return MixedAppendPlan::NeedsFullRedraw;
-                    }
-
-                    let bottom_visible_row = simulated_viewport.first_visible_managed_row
-                        + height.saturating_sub(1) as isize;
-                    let safe_capacity =
-                        bottom_visible_row - simulated_viewport.cursor_managed_row as isize + 1;
-                    if safe_capacity <= 0 {
-                        return MixedAppendPlan::NeedsFullRedraw;
-                    }
-
-                    let remaining = current.end - next_current_row;
-                    let chunk_len = remaining.min(safe_capacity as usize);
-                    let Some(final_sentinel_row) =
-                        simulated_viewport.cursor_managed_row.checked_add(chunk_len)
-                    else {
-                        return MixedAppendPlan::NeedsFullRedraw;
-                    };
-
-                    move_cursor_to_managed_row(
-                        &mut operations,
-                        &mut actual_cursor_row,
-                        next_target_row,
-                    );
-                    operations.push(PlannedOperation::CarriageReturn);
-                    operations.push(PlannedOperation::InsertLines(chunk_len));
-                    for offset in 0..chunk_len {
-                        if offset > 0 {
-                            operations.push(PlannedOperation::Newline);
-                        }
-                        let current_row = next_current_row + offset;
-                        operations.push(PlannedOperation::ClearLine);
-                        operations
-                            .push(PlannedOperation::Write(current_frame[current_row].as_str()));
-                    }
-                    operations.push(PlannedOperation::CarriageReturn);
-
-                    simulated_viewport =
-                        simulated_viewport.with_cursor_managed_row(final_sentinel_row);
-                    row_delta += chunk_len as isize;
-                    actual_cursor_row = next_target_row + chunk_len.saturating_sub(1);
-                    next_target_row += chunk_len;
-                    next_current_row += chunk_len;
-
-                    let scroll_up_count =
-                        scroll_up_count_to_reveal_cursor(simulated_viewport, height);
-                    if scroll_up_count > 0 {
-                        operations.push(PlannedOperation::ScrollUp(scroll_up_count));
-                        simulated_viewport.first_visible_managed_row += scroll_up_count as isize;
-                        let Some(scrolled_cursor_row) =
-                            actual_cursor_row.checked_add(scroll_up_count)
-                        else {
-                            return MixedAppendPlan::NeedsFullRedraw;
-                        };
-                        actual_cursor_row = scrolled_cursor_row;
-                    }
-                }
-            }
+        if planner.plan_patch(patch).is_err() {
+            return PatchPlan::NeedsFullRedraw;
         }
     }
 
-    if !can_move_cursor_to_viewport_row(
-        simulated_viewport,
-        actual_cursor_row,
-        simulated_viewport.cursor_managed_row,
-        height,
-    ) {
-        return MixedAppendPlan::NeedsFullRedraw;
-    }
-    move_cursor_to_managed_row(
-        &mut operations,
-        &mut actual_cursor_row,
-        simulated_viewport.cursor_managed_row,
-    );
-
-    if !trailing_append_ranges.is_empty() {
-        trailing_append_ranges.sort_by_key(|range| range.start);
-        let appended_len = trailing_append_ranges
-            .iter()
-            .map(std::ops::Range::len)
-            .sum();
-        for range in trailing_append_ranges {
-            operations.extend(plan_append_operations(&current_frame[range]));
-        }
-        simulated_viewport = simulated_viewport.after_newlines(appended_len, height);
-    }
-
-    MixedAppendPlan::Planned {
-        operations,
-        viewport: simulated_viewport,
-    }
+    planner.finish().unwrap_or(PatchPlan::NeedsFullRedraw)
 }
 
 fn scroll_up_count_to_reveal_cursor(viewport: ViewportState, height: usize) -> usize {
@@ -635,7 +557,7 @@ mod tests {
 
         let plan = plan_structural_patches_top_down(viewport, &current_frame, 10, &patches);
 
-        let MixedAppendPlan::Planned {
+        let PatchPlan::Planned {
             operations,
             viewport,
         } = plan
