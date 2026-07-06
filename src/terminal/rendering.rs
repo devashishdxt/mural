@@ -217,6 +217,19 @@ fn plan_frame_render_update<'a>(
         MixedAppendPlan::Unsupported => {}
     }
 
+    match plan_deletes_top_down(last_frame.viewport, current_frame, height, &patches) {
+        MixedAppendPlan::Planned {
+            operations,
+            viewport,
+        } => {
+            return PlannedFrameRender::changed_lines(operations, viewport);
+        }
+        MixedAppendPlan::NeedsFullRedraw => {
+            return PlannedFrameRender::full_redraw(current_frame.len(), height);
+        }
+        MixedAppendPlan::Unsupported => {}
+    }
+
     if let Some((operations, viewport)) =
         plan_patch_operations(last_frame.viewport, current_frame, height, &patches)
     {
@@ -337,6 +350,110 @@ fn move_cursor_to_managed_row(
         operations.push(PlannedOperation::MoveDown(target_row - *actual_cursor_row));
     }
     *actual_cursor_row = target_row;
+}
+
+fn old_row_after_delta(old_row: usize, row_delta: isize) -> Option<usize> {
+    (old_row as isize).checked_add(row_delta)?.try_into().ok()
+}
+
+fn plan_deletes_top_down<'a>(
+    viewport: ViewportState,
+    current_frame: &'a [String],
+    height: usize,
+    patches: &[DocumentPatch],
+) -> MixedAppendPlan<'a> {
+    if !patches
+        .iter()
+        .any(|patch| matches!(patch, DocumentPatch::DeleteLines { .. }))
+    {
+        return MixedAppendPlan::Unsupported;
+    }
+
+    let mut operations = Vec::new();
+    let mut simulated_viewport = viewport;
+    let mut actual_cursor_row = viewport.cursor_managed_row;
+    let mut row_delta = 0;
+
+    for (index, patch) in patches.iter().enumerate() {
+        match patch {
+            DocumentPatch::ChangedLine {
+                old_row,
+                current_row,
+            } => {
+                let Some(target_row) = old_row_after_delta(*old_row, row_delta) else {
+                    return MixedAppendPlan::NeedsFullRedraw;
+                };
+                if !row_is_visible(simulated_viewport, target_row, height) {
+                    return MixedAppendPlan::NeedsFullRedraw;
+                }
+
+                move_cursor_to_managed_row(&mut operations, &mut actual_cursor_row, target_row);
+                operations.push(PlannedOperation::CarriageReturn);
+                operations.push(PlannedOperation::ClearLine);
+                operations.push(PlannedOperation::Write(
+                    current_frame[*current_row].as_str(),
+                ));
+                operations.push(PlannedOperation::CarriageReturn);
+            }
+            DocumentPatch::DeleteLines { old } => {
+                let Some(target_row) = old_row_after_delta(old.start, row_delta) else {
+                    return MixedAppendPlan::NeedsFullRedraw;
+                };
+                if !row_is_visible(simulated_viewport, target_row, height) {
+                    return MixedAppendPlan::NeedsFullRedraw;
+                }
+
+                let Some(final_sentinel_row) =
+                    simulated_viewport.cursor_managed_row.checked_sub(old.len())
+                else {
+                    return MixedAppendPlan::NeedsFullRedraw;
+                };
+                if target_row > final_sentinel_row {
+                    return MixedAppendPlan::NeedsFullRedraw;
+                }
+
+                move_cursor_to_managed_row(&mut operations, &mut actual_cursor_row, target_row);
+                operations.push(PlannedOperation::CarriageReturn);
+                operations.push(PlannedOperation::DeleteLines(old.len()));
+                simulated_viewport = simulated_viewport.with_cursor_managed_row(final_sentinel_row);
+                if !simulated_viewport.cursor_is_visible(height) {
+                    return MixedAppendPlan::NeedsFullRedraw;
+                }
+                row_delta -= old.len() as isize;
+            }
+            DocumentPatch::InsertLines { old_row, current } => {
+                let Some(target_row) = old_row_after_delta(*old_row, row_delta) else {
+                    return MixedAppendPlan::Unsupported;
+                };
+                if index != patches.len() - 1
+                    || target_row != simulated_viewport.cursor_managed_row
+                    || current.end != current_frame.len()
+                {
+                    return MixedAppendPlan::Unsupported;
+                }
+
+                move_cursor_to_managed_row(
+                    &mut operations,
+                    &mut actual_cursor_row,
+                    simulated_viewport.cursor_managed_row,
+                );
+                operations.extend(plan_append_operations(&current_frame[current.clone()]));
+                simulated_viewport = simulated_viewport.after_newlines(current.len(), height);
+                actual_cursor_row = simulated_viewport.cursor_managed_row;
+            }
+        }
+    }
+
+    move_cursor_to_managed_row(
+        &mut operations,
+        &mut actual_cursor_row,
+        simulated_viewport.cursor_managed_row,
+    );
+
+    MixedAppendPlan::Planned {
+        operations,
+        viewport: simulated_viewport,
+    }
 }
 
 fn plan_patch_operations<'a>(

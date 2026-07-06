@@ -667,6 +667,151 @@ fn multi_line_middle_delete_preserves_shifted_suffix_without_redrawing_it() {
 }
 
 #[test]
+fn separate_deletes_translate_rows_and_track_cursor_continuously() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&[
+        "keep zero",
+        "remove one",
+        "keep two",
+        "remove three",
+        "keep four",
+    ]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 8,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["keep zero", "keep two", "keep four"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations()[13..],
+        [
+            Operation::MoveUp(4),
+            Operation::CarriageReturn,
+            Operation::DeleteLines(1),
+            Operation::MoveDown(1),
+            Operation::CarriageReturn,
+            Operation::DeleteLines(1),
+            Operation::MoveDown(1),
+            Operation::Flush,
+        ]
+    );
+    assert_eq!(
+        terminal.last_committed_frame,
+        committed_frame(
+            vec![
+                "keep zero".to_owned(),
+                "keep two".to_owned(),
+                "keep four".to_owned(),
+            ],
+            0,
+            3,
+        )
+    );
+}
+
+#[test]
+fn trailing_append_after_delete_waits_until_cursor_returns_to_final_sentinel() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["top", "removed", "bottom"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 8,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["top", "bottom", "appended"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations()[9..],
+        [
+            Operation::MoveUp(2),
+            Operation::CarriageReturn,
+            Operation::DeleteLines(1),
+            Operation::MoveDown(1),
+            Operation::Write("appended".to_owned()),
+            Operation::Newline,
+            Operation::Flush,
+        ]
+    );
+}
+
+#[test]
+fn changed_line_after_delete_uses_translated_row_and_preserves_view() {
+    let backend = RecordingBackend::default();
+    let operations = backend.clone();
+    let block = LinesBlock::new(&["top", "removed", "stable", "old bottom"]);
+    let mut terminal = Terminal::new(
+        backend,
+        TerminalSize {
+            width: 80,
+            height: 8,
+        },
+        CursorPosition { row: 0, column: 0 },
+    )
+    .unwrap();
+
+    terminal.insert_live("lines", block.clone());
+    terminal.render().unwrap();
+    block.set_lines(&["top", "stable", "new bottom"]);
+    terminal
+        .get_live_mut::<LinesBlock, _>("lines")
+        .expect("lines block should exist");
+    terminal.render().unwrap();
+
+    assert_eq!(
+        operations.operations()[11..],
+        [
+            Operation::MoveUp(3),
+            Operation::CarriageReturn,
+            Operation::DeleteLines(1),
+            Operation::MoveDown(1),
+            Operation::CarriageReturn,
+            Operation::ClearLine,
+            Operation::Write("new bottom".to_owned()),
+            Operation::CarriageReturn,
+            Operation::MoveDown(1),
+            Operation::Flush,
+        ]
+    );
+    assert_eq!(
+        terminal.last_committed_frame,
+        committed_frame(
+            vec![
+                "top".to_owned(),
+                "stable".to_owned(),
+                "new bottom".to_owned()
+            ],
+            0,
+            3,
+        )
+    );
+}
+
+#[test]
 fn delete_target_above_visible_viewport_falls_back_to_full_redraw() {
     let last_frame = committed_frame(
         ["zero", "one", "two", "three"]
