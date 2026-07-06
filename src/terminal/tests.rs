@@ -748,7 +748,7 @@ fn pure_append_writes_at_sentinel_without_clearing_and_tracks_scrolled_sentinel(
 }
 
 #[test]
-fn changed_line_plus_trailing_append_appends_before_patching_old_coordinate() {
+fn changed_line_plus_trailing_append_patches_old_coordinate_before_appending() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();
     let status = CountingBlock::new("old");
@@ -782,16 +782,24 @@ fn changed_line_plus_trailing_append_appends_before_patching_old_coordinate() {
             Operation::Write("stable".to_owned()),
             Operation::Newline,
             Operation::Flush,
-            Operation::Write("tail".to_owned()),
-            Operation::Newline,
-            Operation::MoveUp(3),
+            Operation::MoveUp(2),
             Operation::CarriageReturn,
             Operation::ClearLine,
             Operation::Write("new".to_owned()),
             Operation::CarriageReturn,
-            Operation::MoveDown(3),
+            Operation::MoveDown(2),
+            Operation::Write("tail".to_owned()),
+            Operation::Newline,
             Operation::Flush,
         ]
+    );
+    assert_eq!(
+        terminal.last_committed_frame,
+        committed_frame(
+            vec!["new".to_owned(), "stable".to_owned(), "tail".to_owned()],
+            0,
+            3,
+        )
     );
 }
 
@@ -830,21 +838,61 @@ fn bottom_row_initial_cursor_can_append_and_patch_visible_prior_line_without_ful
             Operation::Write("three".to_owned()),
             Operation::Newline,
             Operation::Flush,
-            Operation::Write("four".to_owned()),
-            Operation::Newline,
-            Operation::MoveUp(3),
+            Operation::MoveUp(2),
             Operation::CarriageReturn,
             Operation::ClearLine,
             Operation::Write("TWO".to_owned()),
             Operation::CarriageReturn,
-            Operation::MoveDown(3),
+            Operation::MoveDown(2),
+            Operation::Write("four".to_owned()),
+            Operation::Newline,
             Operation::Flush,
         ]
     );
 }
 
 #[test]
-fn append_induced_scroll_hiding_remaining_patch_falls_back_to_full_redraw() {
+fn multiple_changed_lines_before_trailing_append_track_cursor_without_zero_moves() {
+    let last_frame = committed_frame(
+        vec![
+            "old one".to_owned(),
+            "old two".to_owned(),
+            "stable".to_owned(),
+        ],
+        0,
+        3,
+    );
+    let current_frame = vec![
+        "new one".to_owned(),
+        "new two".to_owned(),
+        "stable".to_owned(),
+        "tail".to_owned(),
+    ];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 24, false);
+
+    assert_eq!(
+        plan,
+        FramePlan::ChangedLines(vec![
+            PlannedOperation::MoveUp(3),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("new one"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(1),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("new two"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(2),
+            PlannedOperation::Write("tail"),
+            PlannedOperation::Newline,
+        ])
+    );
+}
+
+#[test]
+fn append_induced_scroll_patches_initially_visible_target_before_appending() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();
     let middle = CountingBlock::new("old middle");
@@ -882,21 +930,32 @@ fn append_induced_scroll_hiding_remaining_patch_falls_back_to_full_redraw() {
             Operation::Write("bottom".to_owned()),
             Operation::Newline,
             Operation::Flush,
-            Operation::ClearScreen,
-            Operation::PurgeScrollback,
-            Operation::MoveToTopLeft,
-            Operation::Write("top".to_owned()),
-            Operation::Newline,
+            Operation::MoveUp(2),
+            Operation::CarriageReturn,
+            Operation::ClearLine,
             Operation::Write("new middle".to_owned()),
-            Operation::Newline,
-            Operation::Write("bottom".to_owned()),
-            Operation::Newline,
+            Operation::CarriageReturn,
+            Operation::MoveDown(2),
             Operation::Write("tail one".to_owned()),
             Operation::Newline,
             Operation::Write("tail two".to_owned()),
             Operation::Newline,
             Operation::Flush,
         ]
+    );
+    assert_eq!(
+        terminal.last_committed_frame,
+        committed_frame(
+            vec![
+                "top".to_owned(),
+                "new middle".to_owned(),
+                "bottom".to_owned(),
+                "tail one".to_owned(),
+                "tail two".to_owned(),
+            ],
+            3,
+            5,
+        )
     );
 }
 

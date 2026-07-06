@@ -199,6 +199,24 @@ fn plan_frame_render_update<'a>(
     }
 
     let patches = translate_diff_to_patches(&patience_diff(&last_frame.lines, current_frame));
+    match plan_changed_lines_before_trailing_append(
+        last_frame.viewport,
+        current_frame,
+        height,
+        &patches,
+    ) {
+        MixedAppendPlan::Planned {
+            operations,
+            viewport,
+        } => {
+            return PlannedFrameRender::changed_lines(operations, viewport);
+        }
+        MixedAppendPlan::NeedsFullRedraw => {
+            return PlannedFrameRender::full_redraw(current_frame.len(), height);
+        }
+        MixedAppendPlan::Unsupported => {}
+    }
+
     if let Some((operations, viewport)) =
         plan_patch_operations(last_frame.viewport, current_frame, height, &patches)
     {
@@ -238,6 +256,87 @@ fn plan_append_operations(lines: &[String]) -> Vec<PlannedOperation<'_>> {
             ]
         })
         .collect()
+}
+
+enum MixedAppendPlan<'a> {
+    Planned {
+        operations: Vec<PlannedOperation<'a>>,
+        viewport: ViewportState,
+    },
+    NeedsFullRedraw,
+    Unsupported,
+}
+
+fn plan_changed_lines_before_trailing_append<'a>(
+    viewport: ViewportState,
+    current_frame: &'a [String],
+    height: usize,
+    patches: &[DocumentPatch],
+) -> MixedAppendPlan<'a> {
+    let Some((DocumentPatch::InsertLines { old_row, current }, changed_patches)) =
+        patches.split_last()
+    else {
+        return MixedAppendPlan::Unsupported;
+    };
+
+    if *old_row != viewport.cursor_managed_row
+        || current.end != current_frame.len()
+        || changed_patches.is_empty()
+        || !changed_patches
+            .iter()
+            .all(|patch| matches!(patch, DocumentPatch::ChangedLine { .. }))
+    {
+        return MixedAppendPlan::Unsupported;
+    }
+
+    let mut operations = Vec::new();
+    let mut actual_cursor_row = viewport.cursor_managed_row;
+    for patch in changed_patches {
+        let DocumentPatch::ChangedLine {
+            old_row,
+            current_row,
+        } = patch
+        else {
+            unreachable!("changed patches already filtered");
+        };
+
+        if !row_is_visible(viewport, *old_row, height) {
+            return MixedAppendPlan::NeedsFullRedraw;
+        }
+
+        move_cursor_to_managed_row(&mut operations, &mut actual_cursor_row, *old_row);
+        operations.push(PlannedOperation::CarriageReturn);
+        operations.push(PlannedOperation::ClearLine);
+        operations.push(PlannedOperation::Write(
+            current_frame[*current_row].as_str(),
+        ));
+        operations.push(PlannedOperation::CarriageReturn);
+    }
+
+    move_cursor_to_managed_row(
+        &mut operations,
+        &mut actual_cursor_row,
+        viewport.cursor_managed_row,
+    );
+    operations.extend(plan_append_operations(&current_frame[current.clone()]));
+
+    MixedAppendPlan::Planned {
+        operations,
+        viewport: viewport.after_newlines(current.len(), height),
+    }
+}
+
+fn move_cursor_to_managed_row(
+    operations: &mut Vec<PlannedOperation<'_>>,
+    actual_cursor_row: &mut usize,
+    target_row: usize,
+) {
+    if target_row < *actual_cursor_row {
+        operations.push(PlannedOperation::MoveUp(*actual_cursor_row - target_row));
+    } else if target_row > *actual_cursor_row {
+        operations.push(PlannedOperation::MoveDown(target_row - *actual_cursor_row));
+    }
+    *actual_cursor_row = target_row;
 }
 
 fn plan_patch_operations<'a>(
