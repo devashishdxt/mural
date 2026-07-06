@@ -347,7 +347,7 @@ fn full_redraw_resets_viewport_for_short_exact_footprint_and_long_content() {
 }
 
 #[test]
-fn middle_insert_that_would_push_sentinel_below_viewport_falls_back_to_full_redraw() {
+fn middle_insert_scrolls_up_immediately_when_chunk_pushes_sentinel_below_viewport() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();
     let block = LinesBlock::new(&["bottom"]);
@@ -377,15 +377,23 @@ fn middle_insert_that_would_push_sentinel_below_viewport_falls_back_to_full_redr
             Operation::Write("bottom".to_owned()),
             Operation::Newline,
             Operation::Flush,
-            Operation::ClearScreen,
-            Operation::PurgeScrollback,
-            Operation::MoveToTopLeft,
+            Operation::MoveUp(1),
+            Operation::CarriageReturn,
+            Operation::InsertLines(1),
+            Operation::ClearLine,
             Operation::Write("top".to_owned()),
-            Operation::Newline,
-            Operation::Write("bottom".to_owned()),
-            Operation::Newline,
+            Operation::CarriageReturn,
+            Operation::ScrollUp(1),
+            Operation::MoveDown(1),
             Operation::Flush,
         ]
+    );
+    assert_eq!(
+        terminal.last_committed_frame.viewport,
+        ViewportState {
+            first_visible_managed_row: -1,
+            cursor_managed_row: 2,
+        }
     );
 }
 
@@ -519,7 +527,45 @@ fn multi_line_insert_clears_each_inserted_row_and_restores_sentinel() {
 }
 
 #[test]
-fn middle_insert_that_would_discard_sentinel_falls_back_to_full_redraw() {
+fn multi_line_middle_insert_splits_into_safe_chunks_and_preserves_insert_order() {
+    let last_frame = committed_frame(vec!["top".to_owned(), "bottom".to_owned()], -1, 2);
+    let current_frame = vec![
+        "one".to_owned(),
+        "two".to_owned(),
+        "top".to_owned(),
+        "BOTTOM".to_owned(),
+    ];
+
+    let plan = plan_frame_render(&last_frame, &current_frame, 4, false);
+
+    assert_eq!(
+        plan,
+        FramePlan::ChangedLines(vec![
+            PlannedOperation::MoveUp(2),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::InsertLines(1),
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("one"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ScrollUp(1),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::InsertLines(1),
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("two"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ScrollUp(1),
+            PlannedOperation::MoveDown(1),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::ClearLine,
+            PlannedOperation::Write("BOTTOM"),
+            PlannedOperation::CarriageReturn,
+            PlannedOperation::MoveDown(1),
+        ])
+    );
+}
+
+#[test]
+fn middle_insert_may_discard_old_sentinel_when_scroll_repair_reveals_new_sentinel() {
     let backend = RecordingBackend::default();
     let operations = backend.clone();
     let block = LinesBlock::new(&["top", "bottom"]);
@@ -544,17 +590,23 @@ fn middle_insert_that_would_discard_sentinel_falls_back_to_full_redraw() {
     assert_eq!(
         operations.operations()[7..],
         [
-            Operation::ClearScreen,
-            Operation::PurgeScrollback,
-            Operation::MoveToTopLeft,
-            Operation::Write("top".to_owned()),
-            Operation::Newline,
+            Operation::MoveUp(1),
+            Operation::CarriageReturn,
+            Operation::InsertLines(1),
+            Operation::ClearLine,
             Operation::Write("inserted".to_owned()),
-            Operation::Newline,
-            Operation::Write("bottom".to_owned()),
-            Operation::Newline,
+            Operation::CarriageReturn,
+            Operation::ScrollUp(1),
+            Operation::MoveDown(1),
             Operation::Flush,
         ]
+    );
+    assert_eq!(
+        terminal.last_committed_frame.viewport,
+        ViewportState {
+            first_visible_managed_row: 1,
+            cursor_managed_row: 3,
+        }
     );
 }
 

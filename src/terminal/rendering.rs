@@ -251,12 +251,14 @@ fn render_planned_operations<B: Backend>(
 }
 
 fn row_is_visible(viewport: ViewportState, row: usize, height: usize) -> bool {
+    row_is_viewport_visible(viewport, row, height) && row <= viewport.cursor_managed_row
+}
+
+fn row_is_viewport_visible(viewport: ViewportState, row: usize, height: usize) -> bool {
     let managed_row = row as isize;
     let visible_row = managed_row - viewport.first_visible_managed_row;
 
-    managed_row >= viewport.first_visible_managed_row
-        && row <= viewport.cursor_managed_row
-        && visible_row < height as isize
+    managed_row >= viewport.first_visible_managed_row && visible_row < height as isize
 }
 
 fn plan_append_operations(lines: &[String]) -> Vec<PlannedOperation<'_>> {
@@ -450,33 +452,69 @@ fn plan_structural_patches_top_down<'a>(
                     return MixedAppendPlan::NeedsFullRedraw;
                 }
 
-                let Some(final_sentinel_row) = simulated_viewport
-                    .cursor_managed_row
-                    .checked_add(current.len())
-                else {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                };
-                let resulting_viewport =
-                    simulated_viewport.with_cursor_managed_row(final_sentinel_row);
-                if !resulting_viewport.cursor_is_visible(height) {
-                    return MixedAppendPlan::NeedsFullRedraw;
-                }
-
-                move_cursor_to_managed_row(&mut operations, &mut actual_cursor_row, target_row);
-                operations.push(PlannedOperation::CarriageReturn);
-                operations.push(PlannedOperation::InsertLines(current.len()));
-                for (offset, current_row) in current.clone().enumerate() {
-                    if offset > 0 {
-                        operations.push(PlannedOperation::Newline);
+                let mut next_target_row = target_row;
+                let mut next_current_row = current.start;
+                while next_current_row < current.end {
+                    if !row_is_viewport_visible(simulated_viewport, actual_cursor_row, height)
+                        || !row_is_viewport_visible(simulated_viewport, next_target_row, height)
+                    {
+                        return MixedAppendPlan::NeedsFullRedraw;
                     }
-                    operations.push(PlannedOperation::ClearLine);
-                    operations.push(PlannedOperation::Write(current_frame[current_row].as_str()));
-                }
-                operations.push(PlannedOperation::CarriageReturn);
 
-                simulated_viewport = resulting_viewport;
-                row_delta += current.len() as isize;
-                actual_cursor_row = target_row + current.len().saturating_sub(1);
+                    let bottom_visible_row = simulated_viewport.first_visible_managed_row
+                        + height.saturating_sub(1) as isize;
+                    let safe_capacity =
+                        bottom_visible_row - simulated_viewport.cursor_managed_row as isize + 1;
+                    if safe_capacity <= 0 {
+                        return MixedAppendPlan::NeedsFullRedraw;
+                    }
+
+                    let remaining = current.end - next_current_row;
+                    let chunk_len = remaining.min(safe_capacity as usize);
+                    let Some(final_sentinel_row) =
+                        simulated_viewport.cursor_managed_row.checked_add(chunk_len)
+                    else {
+                        return MixedAppendPlan::NeedsFullRedraw;
+                    };
+
+                    move_cursor_to_managed_row(
+                        &mut operations,
+                        &mut actual_cursor_row,
+                        next_target_row,
+                    );
+                    operations.push(PlannedOperation::CarriageReturn);
+                    operations.push(PlannedOperation::InsertLines(chunk_len));
+                    for offset in 0..chunk_len {
+                        if offset > 0 {
+                            operations.push(PlannedOperation::Newline);
+                        }
+                        let current_row = next_current_row + offset;
+                        operations.push(PlannedOperation::ClearLine);
+                        operations
+                            .push(PlannedOperation::Write(current_frame[current_row].as_str()));
+                    }
+                    operations.push(PlannedOperation::CarriageReturn);
+
+                    simulated_viewport =
+                        simulated_viewport.with_cursor_managed_row(final_sentinel_row);
+                    row_delta += chunk_len as isize;
+                    actual_cursor_row = next_target_row + chunk_len.saturating_sub(1);
+                    next_target_row += chunk_len;
+                    next_current_row += chunk_len;
+
+                    let scroll_up_count =
+                        scroll_up_count_to_reveal_cursor(simulated_viewport, height);
+                    if scroll_up_count > 0 {
+                        operations.push(PlannedOperation::ScrollUp(scroll_up_count));
+                        simulated_viewport.first_visible_managed_row += scroll_up_count as isize;
+                        let Some(scrolled_cursor_row) =
+                            actual_cursor_row.checked_add(scroll_up_count)
+                        else {
+                            return MixedAppendPlan::NeedsFullRedraw;
+                        };
+                        actual_cursor_row = scrolled_cursor_row;
+                    }
+                }
             }
         }
     }
