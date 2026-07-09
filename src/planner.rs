@@ -276,7 +276,6 @@ impl<'a> IncrementalPlanner<'a> {
         let cursor_row = self.cursor.cursor_row();
 
         if row == cursor_row {
-            return;
         } else if row > cursor_row {
             let rows = row - cursor_row;
 
