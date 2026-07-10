@@ -1,5 +1,6 @@
 use std::cmp::min;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cursor {
     height: usize,
     cursor_row: usize,

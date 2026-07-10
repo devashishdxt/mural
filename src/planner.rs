@@ -31,7 +31,7 @@ pub enum RenderOp<'a> {
     MoveToTopLeft,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan<'a> {
     ops: Vec<RenderOp<'a>>,
     final_sentinel_row: usize,
@@ -46,14 +46,7 @@ impl<'a> Plan<'a> {
         self.final_sentinel_row
     }
 
-    fn no_changes(final_sentinel_row: usize) -> Self {
-        Self {
-            ops: Vec::with_capacity(0),
-            final_sentinel_row,
-        }
-    }
-
-    fn full_redraw(lines: &'a [String], height: usize) -> Self {
+    pub fn full_redraw(lines: &'a [String], height: usize) -> Self {
         let mut ops = Vec::with_capacity((lines.len() * 3) + 3);
 
         ops.push(RenderOp::ClearScreen);
@@ -73,12 +66,20 @@ impl<'a> Plan<'a> {
             final_sentinel_row: min(lines.len(), height - 1),
         }
     }
+
+    fn no_changes(final_sentinel_row: usize) -> Self {
+        Self {
+            ops: Vec::with_capacity(0),
+            final_sentinel_row,
+        }
+    }
 }
 
 pub trait Planner<'a> {
     fn plan(self, diff: NormalizedDiff) -> Plan<'a>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DefaultPlanner<'a> {
     old_frame_len: usize,
     new_frame: &'a [String],
@@ -124,6 +125,7 @@ impl<'a> Planner<'a> for DefaultPlanner<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncrementalPlanner<'a> {
     new_frame: &'a [String],
     viewport: Viewport,

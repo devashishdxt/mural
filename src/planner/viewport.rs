@@ -1,3 +1,4 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Viewport {
     frame_len: usize,
     height: usize,

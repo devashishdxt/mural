@@ -1,7 +1,7 @@
 use crate::{
     backend::{Backend, ExecuteOp},
     differ::{Differ, MyersDiffer},
-    planner::{DefaultPlanner, Planner},
+    planner::{DefaultPlanner, Plan, Planner},
 };
 
 pub struct Renderer<'a, 'b> {
@@ -26,21 +26,25 @@ impl<'a, 'b> Renderer<'a, 'b> {
         }
     }
 
-    pub fn render<B>(self, backend: &mut B) -> Result<usize, B::Error>
+    pub fn render<B>(self, backend: &mut B, force_full_redraw: bool) -> Result<usize, B::Error>
     where
         B: Backend,
     {
-        let diff = MyersDiffer
-            .diff(self.current_frame, self.new_frame)
-            .normalize();
+        let plan = if force_full_redraw {
+            Plan::full_redraw(self.new_frame, self.height)
+        } else {
+            let diff = MyersDiffer
+                .diff(self.current_frame, self.new_frame)
+                .normalize();
 
-        let plan = DefaultPlanner::new(
-            self.current_frame.len(),
-            self.new_frame,
-            self.height,
-            self.sentinel_row,
-        )
-        .plan(diff);
+            DefaultPlanner::new(
+                self.current_frame.len(),
+                self.new_frame,
+                self.height,
+                self.sentinel_row,
+            )
+            .plan(diff)
+        };
 
         for render_op in plan.render_ops() {
             backend.execute(*render_op)?;
