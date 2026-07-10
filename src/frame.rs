@@ -72,3 +72,57 @@ impl PartialEq for Frame {
 }
 
 impl Eq for Frame {}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod test {
+    use std::rc::Rc;
+
+    use super::{Frame, RenderedLines};
+
+    fn chunk(lines: &[&str]) -> Rc<RenderedLines> {
+        Rc::new(lines.iter().map(|line| (*line).to_owned()).collect())
+    }
+
+    #[test]
+    fn collection_flattens_non_empty_chunks() {
+        let frame: Frame = [chunk(&["a", "b"]), chunk(&[]), chunk(&["c"])]
+            .into_iter()
+            .collect();
+
+        assert_eq!(frame.len(), 3);
+        assert_eq!(frame.iter().collect::<Vec<_>>(), ["a", "b", "c"]);
+        assert_eq!(&frame[0], "a");
+        assert_eq!(&frame[1], "b");
+        assert_eq!(&frame[2], "c");
+    }
+
+    #[test]
+    fn extend_appends_chunks() {
+        let mut frame: Frame = [chunk(&["a"])].into_iter().collect();
+        let other: Frame = [chunk(&["b", "c"])].into_iter().collect();
+
+        frame.extend(other);
+
+        assert_eq!(frame.iter().collect::<Vec<_>>(), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn equality_ignores_chunk_boundaries() {
+        let left: Frame = [chunk(&["a", "b"]), chunk(&["c"])].into_iter().collect();
+        let right: Frame = [chunk(&["a"]), chunk(&["b", "c"])].into_iter().collect();
+        let different_length: Frame = [chunk(&["a", "b"])].into_iter().collect();
+        let different_content: Frame = [chunk(&["a", "x", "c"])].into_iter().collect();
+
+        assert_eq!(left, right);
+        assert_ne!(left, different_length);
+        assert_ne!(left, different_content);
+    }
+
+    #[test]
+    #[should_panic(expected = "frame index out of bounds")]
+    fn indexing_past_the_end_panics() {
+        let frame: Frame = [chunk(&["a"])].into_iter().collect();
+        let _ = &frame[1];
+    }
+}

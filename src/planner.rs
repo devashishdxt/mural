@@ -324,3 +324,262 @@ impl<'a> Planner<'a> for IncrementalPlanner<'a> {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod test {
+    use std::rc::Rc;
+
+    use similar::DiffOp as SimilarDiffOp;
+
+    use super::{DefaultPlanner, IncrementalPlanner, Plan, Planner, RenderOp};
+    use crate::{
+        differ::{Diff, NormalizedDiff},
+        frame::{Frame, RenderedLines},
+    };
+
+    fn frame(lines: &[&str]) -> Frame {
+        [Rc::new(
+            lines
+                .iter()
+                .map(|line| (*line).to_owned())
+                .collect::<RenderedLines>(),
+        )]
+        .into_iter()
+        .collect()
+    }
+
+    fn diff(operations: impl IntoIterator<Item = SimilarDiffOp>) -> NormalizedDiff {
+        operations.into_iter().collect::<Diff>().normalize()
+    }
+
+    #[test]
+    fn full_redraw_resets_terminal_and_writes_every_line() {
+        let frame = frame(&["one", "two"]);
+
+        let plan = Plan::full_redraw(&frame, 2);
+
+        assert_eq!(
+            plan.render_ops(),
+            [
+                RenderOp::ClearScreen,
+                RenderOp::PurgeScrollback,
+                RenderOp::MoveToTopLeft,
+                RenderOp::Write("one"),
+                RenderOp::CarriageReturn,
+                RenderOp::Newline,
+                RenderOp::Write("two"),
+                RenderOp::CarriageReturn,
+                RenderOp::Newline,
+            ]
+        );
+        assert_eq!(plan.final_sentinel_row(), 1);
+    }
+
+    #[test]
+    fn unchanged_frames_produce_no_operations() {
+        let frame = frame(&["same"]);
+        let plan = DefaultPlanner::new(1, &frame, 4, 1).plan(diff([]));
+
+        assert!(plan.render_ops().is_empty());
+        assert_eq!(plan.final_sentinel_row(), 1);
+    }
+
+    #[test]
+    fn an_offscreen_first_edit_requires_a_full_redraw() {
+        let frame = frame(&["remaining"]);
+        let changes = diff([SimilarDiffOp::Delete {
+            old_index: 1,
+            old_len: 1,
+            new_index: 0,
+        }]);
+
+        let plan = DefaultPlanner::new(6, &frame, 3, 2).plan(changes);
+
+        assert_eq!(plan.render_ops()[0], RenderOp::ClearScreen);
+        assert_eq!(plan.final_sentinel_row(), 1);
+    }
+
+    #[test]
+    fn visible_insert_is_planned_incrementally() {
+        let frame = frame(&["a", "inserted", "b"]);
+        let changes = diff([SimilarDiffOp::Insert {
+            old_index: 1,
+            new_index: 1,
+            new_len: 1,
+        }]);
+
+        let plan = DefaultPlanner::new(2, &frame, 5, 2).plan(changes);
+
+        assert_eq!(
+            plan.render_ops(),
+            [
+                RenderOp::MoveUp(1),
+                RenderOp::CarriageReturn,
+                RenderOp::InsertLines(1),
+                RenderOp::Write("inserted"),
+                RenderOp::CarriageReturn,
+                RenderOp::MoveDown(1),
+                RenderOp::MoveDown(1),
+                RenderOp::CarriageReturn,
+            ]
+        );
+        assert_eq!(plan.final_sentinel_row(), 3);
+    }
+
+    #[test]
+    fn append_uses_newlines_to_follow_terminal_scrolling() {
+        let frame = frame(&["a", "b", "c", "d"]);
+        let changes = diff([SimilarDiffOp::Insert {
+            old_index: 2,
+            new_index: 2,
+            new_len: 2,
+        }]);
+
+        let plan = IncrementalPlanner::new(2, &frame, 3, 2).plan(changes);
+
+        assert_eq!(
+            plan.render_ops(),
+            [
+                RenderOp::Write("c"),
+                RenderOp::CarriageReturn,
+                RenderOp::Newline,
+                RenderOp::Write("d"),
+                RenderOp::CarriageReturn,
+                RenderOp::Newline,
+            ]
+        );
+        assert_eq!(plan.final_sentinel_row(), 2);
+    }
+
+    #[test]
+    fn delete_moves_to_the_edit_then_returns_to_the_sentinel() {
+        let frame = frame(&["a", "c"]);
+        let changes = diff([SimilarDiffOp::Delete {
+            old_index: 1,
+            old_len: 1,
+            new_index: 1,
+        }]);
+
+        let plan = IncrementalPlanner::new(3, &frame, 5, 3).plan(changes);
+
+        assert_eq!(
+            plan.render_ops(),
+            [
+                RenderOp::MoveUp(2),
+                RenderOp::CarriageReturn,
+                RenderOp::DeleteLines(1),
+                RenderOp::MoveDown(1),
+                RenderOp::CarriageReturn,
+            ]
+        );
+        assert_eq!(plan.final_sentinel_row(), 2);
+    }
+
+    #[test]
+    fn equal_length_replace_rewrites_lines() {
+        let frame = frame(&["new a", "new b"]);
+        let changes = diff([SimilarDiffOp::Replace {
+            old_index: 0,
+            old_len: 2,
+            new_index: 0,
+            new_len: 2,
+        }]);
+
+        let plan = IncrementalPlanner::new(2, &frame, 5, 2).plan(changes);
+
+        assert_eq!(
+            plan.render_ops(),
+            [
+                RenderOp::MoveUp(2),
+                RenderOp::CarriageReturn,
+                RenderOp::ClearLine,
+                RenderOp::Write("new a"),
+                RenderOp::CarriageReturn,
+                RenderOp::MoveDown(1),
+                RenderOp::ClearLine,
+                RenderOp::Write("new b"),
+                RenderOp::CarriageReturn,
+                RenderOp::MoveDown(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn growing_and_shrinking_replacements_use_line_edits() {
+        let grown = frame(&["new", "added", "tail"]);
+        let grow = diff([SimilarDiffOp::Replace {
+            old_index: 0,
+            old_len: 1,
+            new_index: 0,
+            new_len: 2,
+        }]);
+        let grow_plan = IncrementalPlanner::new(2, &grown, 5, 2).plan(grow);
+        assert!(grow_plan.render_ops().contains(&RenderOp::InsertLines(1)));
+        assert!(grow_plan.render_ops().contains(&RenderOp::Write("added")));
+
+        let shrunk = frame(&["new"]);
+        let shrink = diff([SimilarDiffOp::Replace {
+            old_index: 0,
+            old_len: 2,
+            new_index: 0,
+            new_len: 1,
+        }]);
+        let shrink_plan = IncrementalPlanner::new(2, &shrunk, 5, 2).plan(shrink);
+        assert!(shrink_plan.render_ops().contains(&RenderOp::DeleteLines(1)));
+    }
+
+    #[test]
+    fn large_middle_insert_is_split_and_scrolled() {
+        let frame = frame(&["old", "a", "b", "c", "d"]);
+        let changes = diff([SimilarDiffOp::Insert {
+            old_index: 1,
+            new_index: 1,
+            new_len: 4,
+        }]);
+
+        let plan = IncrementalPlanner::new(2, &frame, 3, 2).plan(changes);
+
+        assert_eq!(
+            plan.render_ops()
+                .iter()
+                .filter(|operation| matches!(operation, RenderOp::Write(_)))
+                .count(),
+            4
+        );
+        assert!(
+            plan.render_ops()
+                .iter()
+                .any(|operation| matches!(operation, RenderOp::ScrollUp(_)))
+        );
+        assert_eq!(plan.final_sentinel_row(), 2);
+    }
+
+    #[test]
+    fn zero_length_operations_are_ignored() {
+        let frame = frame(&["same"]);
+        let changes = diff([
+            SimilarDiffOp::Delete {
+                old_index: 0,
+                old_len: 0,
+                new_index: 0,
+            },
+            SimilarDiffOp::Insert {
+                old_index: 0,
+                new_index: 0,
+                new_len: 0,
+            },
+            SimilarDiffOp::Replace {
+                old_index: 0,
+                old_len: 0,
+                new_index: 0,
+                new_len: 0,
+            },
+        ]);
+
+        let plan = IncrementalPlanner::new(1, &frame, 3, 1).plan(changes);
+
+        assert!(plan.render_ops().is_empty());
+        assert_eq!(plan.final_sentinel_row(), 1);
+    }
+}

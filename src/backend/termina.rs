@@ -117,3 +117,16 @@ impl Backend for TerminaBackend {
 fn nonzero_count(n: usize) -> Option<u32> {
     (n != 0).then(|| n.try_into().unwrap_or(u32::MAX))
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod test {
+    use super::nonzero_count;
+
+    #[test]
+    fn count_omits_zero_and_clamps_large_values() {
+        assert_eq!(nonzero_count(0), None);
+        assert_eq!(nonzero_count(42), Some(42));
+        assert_eq!(nonzero_count(usize::MAX), Some(u32::MAX));
+    }
+}

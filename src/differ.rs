@@ -175,3 +175,193 @@ fn shifted_index(old_index: usize, shift: isize) -> usize {
         old_index + shift as usize
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod test {
+    use std::rc::Rc;
+
+    use similar::DiffOp as SimilarDiffOp;
+
+    use super::{Diff, DiffOp, Differ, MyersDiffer, shifted_index};
+    use crate::frame::{Frame, RenderedLines};
+
+    fn frame(lines: &[&str]) -> Frame {
+        [Rc::new(
+            lines
+                .iter()
+                .map(|line| (*line).to_owned())
+                .collect::<RenderedLines>(),
+        )]
+        .into_iter()
+        .collect()
+    }
+
+    #[test]
+    fn conversion_ignores_equal_and_preserves_every_edit_kind() {
+        let diff: Diff = [
+            SimilarDiffOp::Equal {
+                old_index: 0,
+                new_index: 0,
+                len: 1,
+            },
+            SimilarDiffOp::Delete {
+                old_index: 1,
+                old_len: 2,
+                new_index: 1,
+            },
+            SimilarDiffOp::Insert {
+                old_index: 3,
+                new_index: 1,
+                new_len: 1,
+            },
+            SimilarDiffOp::Replace {
+                old_index: 4,
+                old_len: 1,
+                new_index: 2,
+                new_len: 2,
+            },
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(
+            diff.diff,
+            [
+                DiffOp::Delete {
+                    old_index: 1,
+                    old_len: 2,
+                    new_index: 1,
+                },
+                DiffOp::Insert {
+                    old_index: 3,
+                    new_index: 1,
+                    new_len: 1,
+                },
+                DiffOp::Replace {
+                    old_index: 4,
+                    old_len: 1,
+                    new_index: 2,
+                    new_len: 2,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn normalization_sorts_and_accounts_for_prior_edits() {
+        let normalized = Diff {
+            diff: vec![
+                DiffOp::Delete {
+                    old_index: 4,
+                    old_len: 2,
+                    new_index: 0,
+                },
+                DiffOp::Replace {
+                    old_index: 3,
+                    old_len: 1,
+                    new_index: 0,
+                    new_len: 2,
+                },
+                DiffOp::Insert {
+                    old_index: 0,
+                    new_index: 0,
+                    new_len: 1,
+                },
+            ],
+        }
+        .normalize();
+
+        assert_eq!(
+            normalized.as_slice(),
+            [
+                DiffOp::Insert {
+                    old_index: 0,
+                    new_index: 0,
+                    new_len: 1,
+                },
+                DiffOp::Replace {
+                    old_index: 4,
+                    old_len: 1,
+                    new_index: 0,
+                    new_len: 2,
+                },
+                DiffOp::Delete {
+                    old_index: 6,
+                    old_len: 2,
+                    new_index: 0,
+                },
+            ]
+        );
+        assert_eq!(normalized.into_iter().count(), 3);
+    }
+
+    #[test]
+    fn deletion_shifts_later_operations_back() {
+        let normalized = Diff {
+            diff: vec![
+                DiffOp::Delete {
+                    old_index: 0,
+                    old_len: 2,
+                    new_index: 0,
+                },
+                DiffOp::Insert {
+                    old_index: 2,
+                    new_index: 0,
+                    new_len: 1,
+                },
+            ],
+        }
+        .normalize();
+
+        assert_eq!(normalized[1].old_index(), 0);
+    }
+
+    #[test]
+    fn myers_differ_captures_changed_lines() {
+        let old = frame(&["same", "old"]);
+        let new = frame(&["same", "new", "extra"]);
+
+        let normalized = MyersDiffer.diff(&old, &new).normalize();
+
+        assert_eq!(
+            normalized.as_slice(),
+            [DiffOp::Replace {
+                old_index: 1,
+                old_len: 1,
+                new_index: 1,
+                new_len: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn each_operation_exposes_its_old_index() {
+        let operations = [
+            DiffOp::Delete {
+                old_index: 1,
+                old_len: 0,
+                new_index: 0,
+            },
+            DiffOp::Insert {
+                old_index: 2,
+                new_index: 0,
+                new_len: 0,
+            },
+            DiffOp::Replace {
+                old_index: 3,
+                old_len: 0,
+                new_index: 0,
+                new_len: 0,
+            },
+        ];
+
+        assert_eq!(operations.map(|operation| operation.old_index()), [1, 2, 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "diff index shift moved before start of slice")]
+    fn invalid_negative_shift_panics() {
+        shifted_index(0, -1);
+    }
+}

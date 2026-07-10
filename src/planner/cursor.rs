@@ -26,3 +26,26 @@ impl Cursor {
         self.cursor_row = self.cursor_row.saturating_sub(rows);
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod test {
+    use super::Cursor;
+
+    #[test]
+    fn movement_is_clamped_to_the_viewport() {
+        let mut cursor = Cursor::new(5, 2);
+
+        cursor.move_down(1);
+        assert_eq!(cursor.cursor_row(), 3);
+
+        cursor.move_down(usize::MAX);
+        assert_eq!(cursor.cursor_row(), 4);
+
+        cursor.move_up(2);
+        assert_eq!(cursor.cursor_row(), 2);
+
+        cursor.move_up(usize::MAX);
+        assert_eq!(cursor.cursor_row(), 0);
+    }
+}

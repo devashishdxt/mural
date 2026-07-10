@@ -141,3 +141,68 @@ impl Viewport {
         self.top_row = self.sentinel_row.saturating_sub(self.frame_len);
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod test {
+    use super::Viewport;
+
+    #[test]
+    fn boundary_tracks_short_and_scrolled_frames() {
+        let short = Viewport::new(2, 5, 4);
+        assert!(short.is_line_visible(0));
+        assert_eq!(short.row_for_index(0), 2);
+        assert_eq!(short.row_for_index(2), 4);
+        assert_eq!(short.available_space(), 1);
+
+        let scrolled = Viewport::new(8, 5, 4);
+        assert!(!scrolled.is_line_visible(3));
+        assert!(scrolled.is_line_visible(4));
+        assert_eq!(scrolled.row_for_index(4), 0);
+        assert_eq!(scrolled.row_for_index(8), 4);
+    }
+
+    #[test]
+    fn chunk_size_avoids_a_post_scroll_when_possible() {
+        let viewport = Viewport::new(2, 5, 2);
+
+        assert_eq!(viewport.insert_chunk_len(1, 1), (1, 0));
+        assert_eq!(viewport.insert_chunk_len(2, 3), (3, 1));
+        assert_eq!(viewport.insert_chunk_len(0, 3), (3, 0));
+    }
+
+    #[test]
+    fn insert_reports_required_scroll_and_scroll_updates_boundary() {
+        let mut viewport = Viewport::new(2, 3, 2);
+
+        assert_eq!(viewport.insert(1), 1);
+        assert_eq!(viewport.frame_len(), 3);
+        assert_eq!(viewport.sentinel_row(), 3);
+
+        viewport.scroll_up(1);
+        assert_eq!(viewport.sentinel_row(), 2);
+        assert_eq!(viewport.row_for_index(1), 0);
+    }
+
+    #[test]
+    fn newline_inserts_a_line_and_keeps_sentinel_visible() {
+        let mut viewport = Viewport::new(2, 3, 2);
+
+        viewport.newline();
+
+        assert_eq!(viewport.frame_len(), 3);
+        assert_eq!(viewport.sentinel_row(), 2);
+        assert!(!viewport.is_line_visible(0));
+    }
+
+    #[test]
+    fn delete_reduces_frame_and_sentinel() {
+        let mut viewport = Viewport::new(4, 6, 4);
+
+        viewport.delete(2);
+
+        assert_eq!(viewport.frame_len(), 2);
+        assert_eq!(viewport.sentinel_row(), 2);
+        assert_eq!(viewport.row_for_index(0), 0);
+    }
+}

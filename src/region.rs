@@ -189,3 +189,143 @@ impl Region {
             .find(|entry| entry.match_id(id.as_ref()))
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod test {
+    use std::{borrow::Cow, cell::Cell, rc::Rc};
+
+    use super::Region;
+    use crate::block::Block;
+
+    struct CountingBlock {
+        text: String,
+        renders: Rc<Cell<usize>>,
+        every_frame: bool,
+    }
+
+    impl CountingBlock {
+        fn new(text: &str, renders: &Rc<Cell<usize>>) -> Self {
+            Self {
+                text: text.to_owned(),
+                renders: Rc::clone(renders),
+                every_frame: false,
+            }
+        }
+    }
+
+    impl Block for CountingBlock {
+        fn render(&self, width: usize) -> Vec<Cow<'_, str>> {
+            self.renders.set(self.renders.get() + 1);
+            vec![Cow::Owned(format!("{}:{width}", self.text))]
+        }
+
+        fn render_every_frame(&self) -> bool {
+            self.every_frame
+        }
+    }
+
+    #[test]
+    fn cached_blocks_render_only_when_needed() {
+        let renders = Rc::new(Cell::new(0));
+        let mut region = Region::default();
+        region.push(CountingBlock::new("block", &renders));
+
+        assert_eq!(region.render(10).iter().collect::<Vec<_>>(), ["block:10"]);
+        assert_eq!(renders.get(), 1);
+
+        region.mark_all_clean();
+        region.render(10);
+        assert_eq!(renders.get(), 1);
+
+        region.render(20);
+        assert_eq!(renders.get(), 2);
+
+        region.mark_all_dirty();
+        region.render(20);
+        assert_eq!(renders.get(), 3);
+    }
+
+    #[test]
+    fn blocks_can_request_rendering_every_frame() {
+        let renders = Rc::new(Cell::new(0));
+        let mut block = CountingBlock::new("dynamic", &renders);
+        block.every_frame = true;
+        let mut region = Region::default();
+        region.push(block);
+
+        region.render(10);
+        region.mark_all_clean();
+        region.render(10);
+
+        assert_eq!(renders.get(), 2);
+    }
+
+    #[test]
+    fn mark_clean_before_first_render_keeps_block_dirty() {
+        let renders = Rc::new(Cell::new(0));
+        let mut region = Region::default();
+        region.push(CountingBlock::new("block", &renders));
+
+        region.mark_all_clean();
+        region.render(10);
+        region.render(10);
+
+        assert_eq!(renders.get(), 2);
+    }
+
+    #[test]
+    fn identified_blocks_support_lookup_and_mutation() {
+        let renders = Rc::new(Cell::new(0));
+        let mut region = Region::default();
+        region.insert("status", CountingBlock::new("before", &renders));
+        region.render(10);
+        region.mark_all_clean();
+
+        assert_eq!(
+            region.get::<CountingBlock>("status").unwrap().text,
+            "before"
+        );
+        assert!(region.get::<String>("status").is_none());
+        assert!(region.get::<CountingBlock>("missing").is_none());
+        assert!(region.get_mut::<String>("status").is_none());
+
+        region.get_mut::<CountingBlock>("status").unwrap().text = "after".to_owned();
+        assert_eq!(region.render(10).iter().collect::<Vec<_>>(), ["after:10"]);
+        assert_eq!(renders.get(), 2);
+    }
+
+    #[test]
+    fn inserting_an_existing_id_replaces_it_in_place() {
+        let renders = Rc::new(Cell::new(0));
+        let mut region = Region::default();
+        region.push("first");
+        region.insert("status", CountingBlock::new("old", &renders));
+        region.insert("status", String::from("new"));
+
+        assert!(region.get::<CountingBlock>("status").is_none());
+        assert_eq!(region.get::<String>("status").unwrap(), "new");
+        assert_eq!(
+            region.render(20).iter().collect::<Vec<_>>(),
+            ["first", "new"]
+        );
+    }
+
+    #[test]
+    fn remove_and_clear_discard_entries() {
+        let mut region = Region::default();
+        region.push("anonymous");
+        region.insert("one", "identified");
+        region.insert("two", "another");
+
+        region.remove("missing");
+        region.remove("one");
+        assert_eq!(
+            region.render(20).iter().collect::<Vec<_>>(),
+            ["anonymous", "another"]
+        );
+
+        region.clear();
+        assert_eq!(region.render(20).len(), 0);
+    }
+}
