@@ -1,20 +1,21 @@
 use crate::{
     backend::{Backend, ExecuteOp},
     differ::{Differ, MyersDiffer},
+    frame::Frame,
     planner::{DefaultPlanner, Plan, Planner},
 };
 
 pub struct Renderer<'a, 'b> {
-    current_frame: &'b [String],
-    new_frame: &'a [String],
+    current_frame: &'b Frame,
+    new_frame: &'a Frame,
     height: usize,
     sentinel_row: usize,
 }
 
 impl<'a, 'b> Renderer<'a, 'b> {
     pub fn new(
-        current_frame: &'b [String],
-        new_frame: &'a [String],
+        current_frame: &'b Frame,
+        new_frame: &'a Frame,
         height: usize,
         sentinel_row: usize,
     ) -> Self {

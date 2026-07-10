@@ -2,6 +2,8 @@ use std::ops::Deref;
 
 use similar::Algorithm;
 
+use crate::frame::Frame;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffOp {
     Delete {
@@ -150,15 +152,15 @@ impl Deref for NormalizedDiff {
 }
 
 pub trait Differ {
-    fn diff(&self, old: &[String], new: &[String]) -> Diff;
+    fn diff(&self, old: &Frame, new: &Frame) -> Diff;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MyersDiffer;
 
 impl Differ for MyersDiffer {
-    fn diff(&self, old: &[String], new: &[String]) -> Diff {
-        similar::capture_diff_slices(Algorithm::Myers, old, new)
+    fn diff(&self, old: &Frame, new: &Frame) -> Diff {
+        similar::capture_diff(Algorithm::Myers, old, 0..old.len(), new, 0..new.len())
             .into_iter()
             .collect()
     }

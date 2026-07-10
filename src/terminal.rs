@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{backend::Backend, block::Block, region::Region, renderer::Renderer};
+use crate::{backend::Backend, block::Block, frame::Frame, region::Region, renderer::Renderer};
 
 #[derive(Debug, Error)]
 pub enum Error<E>
@@ -35,7 +35,7 @@ pub struct Terminal<B> {
     pinned_region: Region,
     size: TerminalSize,
     needs_full_redraw: bool,
-    committed_frame: Vec<String>,
+    committed_frame: Frame,
     sentinel_row: usize,
 }
 
@@ -61,7 +61,7 @@ where
             pinned_region: Default::default(),
             size,
             needs_full_redraw: false,
-            committed_frame: Vec::new(),
+            committed_frame: Frame::default(),
             sentinel_row: position.row,
         })
     }

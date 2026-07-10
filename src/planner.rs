@@ -5,6 +5,7 @@ use std::cmp::min;
 
 use crate::{
     differ::{DiffOp, NormalizedDiff},
+    frame::Frame,
     planner::{cursor::Cursor, viewport::Viewport},
 };
 
@@ -46,16 +47,16 @@ impl<'a> Plan<'a> {
         self.final_sentinel_row
     }
 
-    pub fn full_redraw(lines: &'a [String], height: usize) -> Self {
-        let mut ops = Vec::with_capacity((lines.len() * 3) + 3);
+    pub fn full_redraw(frame: &'a Frame, height: usize) -> Self {
+        let mut ops = Vec::with_capacity((frame.len() * 3) + 3);
 
         ops.push(RenderOp::ClearScreen);
         ops.push(RenderOp::PurgeScrollback);
         ops.push(RenderOp::MoveToTopLeft);
 
-        for line in lines {
+        for line in frame.iter() {
             ops.extend([
-                RenderOp::Write(line.as_str()),
+                RenderOp::Write(line),
                 RenderOp::CarriageReturn,
                 RenderOp::Newline,
             ]);
@@ -63,7 +64,7 @@ impl<'a> Plan<'a> {
 
         Self {
             ops,
-            final_sentinel_row: min(lines.len(), height - 1),
+            final_sentinel_row: min(frame.len(), height - 1),
         }
     }
 
@@ -82,7 +83,7 @@ pub trait Planner<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DefaultPlanner<'a> {
     old_frame_len: usize,
-    new_frame: &'a [String],
+    new_frame: &'a Frame,
     height: usize,
     sentinel_row: usize,
 }
@@ -90,7 +91,7 @@ pub struct DefaultPlanner<'a> {
 impl<'a> DefaultPlanner<'a> {
     pub fn new(
         old_frame_len: usize,
-        new_frame: &'a [String],
+        new_frame: &'a Frame,
         height: usize,
         sentinel_row: usize,
     ) -> Self {
@@ -127,7 +128,7 @@ impl<'a> Planner<'a> for DefaultPlanner<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncrementalPlanner<'a> {
-    new_frame: &'a [String],
+    new_frame: &'a Frame,
     viewport: Viewport,
     cursor: Cursor,
     render_ops: Vec<RenderOp<'a>>,
@@ -136,7 +137,7 @@ pub struct IncrementalPlanner<'a> {
 impl<'a> IncrementalPlanner<'a> {
     pub fn new(
         old_frame_len: usize,
-        new_frame: &'a [String],
+        new_frame: &'a Frame,
         height: usize,
         sentinel_row: usize,
     ) -> Self {
@@ -196,7 +197,7 @@ impl<'a> IncrementalPlanner<'a> {
 
             for i in new_index..new_index + chunk_len {
                 self.render_ops.extend([
-                    RenderOp::Write(self.new_frame[i].as_str()),
+                    RenderOp::Write(&self.new_frame[i]),
                     RenderOp::CarriageReturn,
                     RenderOp::MoveDown(1),
                 ]);
@@ -219,7 +220,7 @@ impl<'a> IncrementalPlanner<'a> {
 
         for i in new_index..new_index + len {
             self.render_ops.extend([
-                RenderOp::Write(self.new_frame[i].as_str()),
+                RenderOp::Write(&self.new_frame[i]),
                 RenderOp::CarriageReturn,
                 RenderOp::Newline,
             ]);
@@ -265,7 +266,7 @@ impl<'a> IncrementalPlanner<'a> {
         for i in new_index..new_index + len {
             self.render_ops.extend([
                 RenderOp::ClearLine,
-                RenderOp::Write(self.new_frame[i].as_str()),
+                RenderOp::Write(&self.new_frame[i]),
                 RenderOp::CarriageReturn,
                 RenderOp::MoveDown(1),
             ]);

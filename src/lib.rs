@@ -1,6 +1,7 @@
 mod backend;
 mod block;
 mod differ;
+mod frame;
 mod planner;
 mod region;
 mod renderer;

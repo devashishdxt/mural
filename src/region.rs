@@ -1,10 +1,15 @@
-use crate::block::{Block, ErasedBlock};
+use std::rc::Rc;
+
+use crate::{
+    block::{Block, ErasedBlock},
+    frame::{Frame, RenderedLines},
+};
 
 struct CachedBlock {
     block: Box<dyn ErasedBlock>,
     dirty: bool,
     width: Option<usize>,
-    lines: Vec<String>,
+    lines: Rc<RenderedLines>,
 }
 
 impl CachedBlock {
@@ -13,7 +18,7 @@ impl CachedBlock {
             block: Box::new(block),
             dirty: true,
             width: None,
-            lines: Vec::new(),
+            lines: Rc::new(Vec::new()),
         }
     }
 
@@ -36,12 +41,12 @@ impl CachedBlock {
         self.block.as_any_mut().downcast_mut()
     }
 
-    fn render(&mut self, width: usize) -> &[String] {
+    fn render(&mut self, width: usize) -> Rc<RenderedLines> {
         if self.should_render(width) {
             self.refresh(width);
         }
 
-        &self.lines
+        Rc::clone(&self.lines)
     }
 
     fn refresh(&mut self, width: usize) {
@@ -53,10 +58,12 @@ impl CachedBlock {
                 .all(|line| !line.contains('\n') && !line.contains('\r'))
         );
 
-        self.lines = rendered_lines
-            .into_iter()
-            .map(|line| line.into_owned())
-            .collect();
+        self.lines = Rc::new(
+            rendered_lines
+                .into_iter()
+                .map(|line| line.into_owned())
+                .collect(),
+        );
         self.width = Some(width);
     }
 
@@ -147,11 +154,10 @@ impl Region {
         }
     }
 
-    pub fn render(&mut self, width: usize) -> Vec<String> {
+    pub fn render(&mut self, width: usize) -> Frame {
         self.entries
             .iter_mut()
-            .flat_map(|entry| entry.block.render(width))
-            .cloned()
+            .map(|entry| entry.block.render(width))
             .collect()
     }
 
