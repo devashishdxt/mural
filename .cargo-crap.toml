@@ -1,9 +1,2 @@
-# Keep test-only helpers and test modules out of production complexity reports.
-exclude = [
-    "src/test_utils.rs",
-    "src/test_utils/**",
-    "src/terminal/tests.rs",
-]
-
 # cargo-crap's default threshold is 30; keep it explicit for CI/readability.
 threshold = 30.0
