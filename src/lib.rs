@@ -10,7 +10,7 @@ mod renderer;
 mod terminal;
 
 pub use self::{
-    backend::{Backend, TerminaBackend},
+    backend::{Backend, BackendProbe, TerminaBackend},
     block::Block,
     terminal::{CursorPosition, Error, Terminal, TerminalSize},
 };

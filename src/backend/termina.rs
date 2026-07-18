@@ -1,21 +1,25 @@
 use std::io::{self, Write};
 
 use termina::{
-    PlatformTerminal,
+    Event, PlatformTerminal, Terminal as _,
     escape::csi::{
         Csi, Cursor, DecPrivateMode, DecPrivateModeCode, Edit, EraseInDisplay, EraseInLine, Mode,
     },
 };
 
-use crate::backend::Backend;
+use crate::{
+    backend::{Backend, BackendProbe},
+    terminal::{CursorPosition, TerminalSize},
+};
 
+/// A terminal backend using Termina's platform terminal.
 pub struct TerminaBackend {
     terminal: PlatformTerminal,
 }
 
 impl TerminaBackend {
     pub fn new() -> Result<Self, io::Error> {
-        PlatformTerminal::new().map(|terminal| Self { terminal })
+        PlatformTerminal::new().map(Into::into)
     }
 
     pub fn into_inner(self) -> PlatformTerminal {
@@ -24,6 +28,24 @@ impl TerminaBackend {
 
     fn write_csi(&mut self, csi: Csi) -> Result<(), io::Error> {
         write!(self.terminal, "{csi}")
+    }
+}
+
+impl From<PlatformTerminal> for TerminaBackend {
+    fn from(terminal: PlatformTerminal) -> Self {
+        Self { terminal }
+    }
+}
+
+impl AsRef<PlatformTerminal> for TerminaBackend {
+    fn as_ref(&self) -> &PlatformTerminal {
+        &self.terminal
+    }
+}
+
+impl AsMut<PlatformTerminal> for TerminaBackend {
+    fn as_mut(&mut self) -> &mut PlatformTerminal {
+        &mut self.terminal
     }
 }
 
@@ -111,6 +133,41 @@ impl Backend for TerminaBackend {
 
     fn flush(&mut self) -> Result<(), Self::Error> {
         self.terminal.flush()
+    }
+}
+
+/// The underlying terminal must be configured so terminal responses can be read before calling
+/// [`BackendProbe::cursor_position`], which typically means entering raw mode. The probe flushes pending output and
+/// blocks until the next cursor-position report. Unrelated events remain available to Termina's event reader. Callers
+/// must not issue overlapping cursor-position queries.
+impl BackendProbe for TerminaBackend {
+    fn terminal_size(&mut self) -> Result<TerminalSize, Self::Error> {
+        let size = self.terminal.get_dimensions()?;
+
+        Ok(TerminalSize {
+            height: usize::from(size.rows),
+            width: usize::from(size.cols),
+        })
+    }
+
+    fn cursor_position(&mut self) -> Result<CursorPosition, Self::Error> {
+        self.write_csi(Csi::Cursor(Cursor::RequestActivePositionReport))?;
+        self.terminal.flush()?;
+
+        let event = self.terminal.read(|event| {
+            matches!(
+                event,
+                Event::Csi(Csi::Cursor(Cursor::ActivePositionReport { .. }))
+            )
+        })?;
+        let Event::Csi(Csi::Cursor(Cursor::ActivePositionReport { line, col })) = event else {
+            unreachable!("filtered terminal read returned an unrelated event")
+        };
+
+        Ok(CursorPosition {
+            row: usize::from(line.get_zero_based()),
+            column: usize::from(col.get_zero_based()),
+        })
     }
 }
 

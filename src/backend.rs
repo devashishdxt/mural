@@ -2,7 +2,10 @@ mod termina;
 
 pub use self::termina::TerminaBackend;
 
-use crate::planner::RenderOp;
+use crate::{
+    planner::RenderOp,
+    terminal::{CursorPosition, TerminalSize},
+};
 
 pub trait Backend {
     type Error: std::error::Error + Send + Sync + 'static;
@@ -33,6 +36,15 @@ pub trait Backend {
 
     // Commit
     fn flush(&mut self) -> Result<(), Self::Error>;
+}
+
+/// Terminal state inspection operations supported by a [`Backend`].
+pub trait BackendProbe: Backend {
+    /// Returns the current terminal dimensions in cells.
+    fn terminal_size(&mut self) -> Result<TerminalSize, Self::Error>;
+
+    /// Returns the current zero-based cursor position.
+    fn cursor_position(&mut self) -> Result<CursorPosition, Self::Error>;
 }
 
 pub(crate) trait ExecuteOp: Backend {
