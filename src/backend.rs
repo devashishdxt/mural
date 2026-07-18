@@ -3,6 +3,7 @@ mod termina;
 pub use self::termina::TerminaBackend;
 
 use crate::{
+    color_scheme::{ColorScheme, detect_from_env},
     planner::RenderOp,
     terminal::{CursorPosition, TerminalSize},
 };
@@ -45,6 +46,15 @@ pub trait BackendProbe: Backend {
 
     /// Returns the current zero-based cursor position.
     fn cursor_position(&mut self) -> Result<CursorPosition, Self::Error>;
+
+    /// Detects the terminal's preferred color scheme.
+    ///
+    /// Returns `None` when no supported detection mechanism provides a usable hint, allowing the
+    /// caller to select its own fallback. Backends that do not override this method inspect only
+    /// `COLORFGBG`.
+    fn color_scheme(&mut self) -> Result<Option<ColorScheme>, Self::Error> {
+        Ok(detect_from_env())
+    }
 }
 
 pub(crate) trait ExecuteOp: Backend {

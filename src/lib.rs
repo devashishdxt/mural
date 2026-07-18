@@ -2,6 +2,7 @@
 
 mod backend;
 mod block;
+mod color_scheme;
 mod differ;
 mod frame;
 mod planner;
@@ -12,5 +13,6 @@ mod terminal;
 pub use self::{
     backend::{Backend, BackendProbe, TerminaBackend},
     block::Block,
+    color_scheme::ColorScheme,
     terminal::{CursorPosition, Error, Terminal, TerminalSize},
 };
