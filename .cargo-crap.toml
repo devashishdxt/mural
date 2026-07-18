@@ -1,2 +1,9 @@
 # cargo-crap's default threshold is 30; keep it explicit for CI/readability.
 threshold = 30.0
+
+# These functions are thin synchronous wrappers around real terminal I/O. Their protocol mapping
+# and deterministic color-scheme logic are covered separately by unit tests.
+allow = [
+    "TerminaBackend::query_terminal_color_scheme",
+    "TerminaBackend::query_terminal_background",
+]
