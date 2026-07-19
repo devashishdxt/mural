@@ -1,9 +1,12 @@
 use std::{any::Any, borrow::Cow};
 
+use crate::color_scheme::ColorScheme;
+
 /// Terminal state available to a block while rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderContext {
     pub(crate) width: usize,
+    pub(crate) color_scheme: ColorScheme,
 }
 
 impl RenderContext {
@@ -12,6 +15,11 @@ impl RenderContext {
     /// This may be zero and can be smaller than the terminal's raw width.
     pub fn width(&self) -> usize {
         self.width
+    }
+
+    /// Returns the terminal's preferred color scheme.
+    pub fn color_scheme(&self) -> ColorScheme {
+        self.color_scheme
     }
 }
 
@@ -66,13 +74,20 @@ mod test {
     use std::borrow::Cow;
 
     use super::{Block, ErasedBlock, RenderContext};
+    use crate::ColorScheme;
 
     #[test]
     fn string_types_wrap_text() {
         let borrowed = "hello world";
         let owned = borrowed.to_owned();
         let cow = Cow::Borrowed(borrowed);
-        let context = RenderContext { width: 5 };
+        let context = RenderContext {
+            width: 5,
+            color_scheme: ColorScheme::Light,
+        };
+
+        assert_eq!(context.width(), 5);
+        assert_eq!(context.color_scheme(), ColorScheme::Light);
 
         for lines in [
             borrowed.render(&context),

@@ -3,6 +3,7 @@ use thiserror::Error;
 use crate::{
     backend::Backend,
     block::{Block, RenderContext},
+    color_scheme::ColorScheme,
     frame::Frame,
     region::Region,
     renderer::Renderer,
@@ -40,6 +41,7 @@ pub struct Terminal<B> {
     live_region: Region,
     pinned_region: Region,
     size: TerminalSize,
+    color_scheme: ColorScheme,
     needs_full_redraw: bool,
     committed_frame: Frame,
     sentinel_row: usize,
@@ -53,6 +55,7 @@ where
         mut backend: B,
         size: TerminalSize,
         mut position: CursorPosition,
+        color_scheme: ColorScheme,
     ) -> Result<Self, Error<B::Error>> {
         validate_size(size)?;
         validate_position(size, position)?;
@@ -66,6 +69,7 @@ where
             live_region: Default::default(),
             pinned_region: Default::default(),
             size,
+            color_scheme,
             needs_full_redraw: false,
             committed_frame: Frame::default(),
             sentinel_row: position.row,
@@ -146,6 +150,15 @@ where
         Ok(())
     }
 
+    pub fn set_color_scheme(&mut self, color_scheme: ColorScheme) {
+        if self.color_scheme == color_scheme {
+            return;
+        }
+
+        self.color_scheme = color_scheme;
+        self.needs_full_redraw = true;
+    }
+
     pub fn force_full_redraw(&mut self) {
         self.needs_full_redraw = true;
     }
@@ -165,6 +178,7 @@ where
     fn render_frame(&mut self, include_pinned: bool) -> Result<(), Error<B::Error>> {
         let context = RenderContext {
             width: self.size.width.saturating_sub(1),
+            color_scheme: self.color_scheme,
         };
         let mut new_frame = self.live_region.render(&context);
 
@@ -245,12 +259,16 @@ mod test {
 
     use super::{CursorPosition, Error, Terminal, TerminalSize};
     use crate::{
+        ColorScheme,
         backend::Backend,
         block::{Block, RenderContext},
     };
 
     fn context(width: usize) -> RenderContext {
-        RenderContext { width }
+        RenderContext {
+            width,
+            color_scheme: ColorScheme::Dark,
+        }
     }
 
     struct CountingBlock {
@@ -260,7 +278,11 @@ mod test {
     impl Block for CountingBlock {
         fn render(&self, context: &RenderContext) -> Vec<Cow<'_, str>> {
             self.renders.set(self.renders.get() + 1);
-            vec![Cow::Owned(context.width().to_string())]
+            vec![Cow::Owned(format!(
+                "{}:{:?}",
+                context.width(),
+                context.color_scheme()
+            ))]
         }
     }
 
@@ -359,26 +381,49 @@ mod test {
                     width: 20,
                 },
                 position(0, 0),
+                ColorScheme::Dark,
             ),
             Err(Error::InvalidTerminalSize)
         ));
         assert!(matches!(
-            Terminal::new(MockBackend::default(), size(), position(5, 0)),
+            Terminal::new(
+                MockBackend::default(),
+                size(),
+                position(5, 0),
+                ColorScheme::Dark
+            ),
             Err(Error::InvalidCursorPosition)
         ));
         assert!(matches!(
-            Terminal::new(MockBackend::default(), size(), position(0, 20)),
+            Terminal::new(
+                MockBackend::default(),
+                size(),
+                position(0, 20),
+                ColorScheme::Dark
+            ),
             Err(Error::InvalidCursorPosition)
         ));
     }
 
     #[test]
     fn constructor_hides_cursor_and_normalizes_nonzero_column() {
-        let at_start = Terminal::new(MockBackend::default(), size(), position(2, 0)).unwrap();
+        let at_start = Terminal::new(
+            MockBackend::default(),
+            size(),
+            position(2, 0),
+            ColorScheme::Dark,
+        )
+        .unwrap();
         assert_eq!(at_start.sentinel_row, 2);
         assert_eq!(at_start.backend.calls, ["hide_cursor", "flush"]);
 
-        let normalized = Terminal::new(MockBackend::default(), size(), position(4, 3)).unwrap();
+        let normalized = Terminal::new(
+            MockBackend::default(),
+            size(),
+            position(4, 3),
+            ColorScheme::Dark,
+        )
+        .unwrap();
         assert_eq!(normalized.sentinel_row, 4);
         assert_eq!(
             normalized.backend.calls,
@@ -393,7 +438,7 @@ mod test {
             ..Default::default()
         };
         assert!(matches!(
-            Terminal::new(backend, size(), position(0, 0)),
+            Terminal::new(backend, size(), position(0, 0), ColorScheme::Dark),
             Err(Error::Backend(_))
         ));
 
@@ -402,14 +447,20 @@ mod test {
             ..Default::default()
         };
         assert!(matches!(
-            Terminal::new(backend, size(), position(0, 1)),
+            Terminal::new(backend, size(), position(0, 1), ColorScheme::Dark),
             Err(Error::Backend(_))
         ));
     }
 
     #[test]
     fn region_api_manages_live_and_pinned_blocks() {
-        let mut terminal = Terminal::new(MockBackend::default(), size(), position(0, 0)).unwrap();
+        let mut terminal = Terminal::new(
+            MockBackend::default(),
+            size(),
+            position(0, 0),
+            ColorScheme::Dark,
+        )
+        .unwrap();
         terminal.push_live("anonymous live");
         terminal.push_pinned("anonymous pinned");
         terminal.insert_live("live", String::from("live value"));
@@ -445,7 +496,13 @@ mod test {
 
     #[test]
     fn render_includes_pinned_blocks_but_finish_removes_them() {
-        let mut terminal = Terminal::new(MockBackend::default(), size(), position(0, 0)).unwrap();
+        let mut terminal = Terminal::new(
+            MockBackend::default(),
+            size(),
+            position(0, 0),
+            ColorScheme::Dark,
+        )
+        .unwrap();
         terminal.push_live("live");
         terminal.push_pinned("pinned");
         terminal.backend.calls.clear();
@@ -475,7 +532,13 @@ mod test {
     #[test]
     fn resize_rerenders_blocks_only_when_width_changes() {
         let renders = Rc::new(Cell::new(0));
-        let mut terminal = Terminal::new(MockBackend::default(), size(), position(0, 0)).unwrap();
+        let mut terminal = Terminal::new(
+            MockBackend::default(),
+            size(),
+            position(0, 0),
+            ColorScheme::Dark,
+        )
+        .unwrap();
         terminal.push_live(CountingBlock {
             renders: Rc::clone(&renders),
         });
@@ -503,8 +566,46 @@ mod test {
     }
 
     #[test]
+    fn color_scheme_changes_rerender_blocks_and_reset_the_screen() {
+        let renders = Rc::new(Cell::new(0));
+        let mut terminal = Terminal::new(
+            MockBackend::default(),
+            size(),
+            position(0, 0),
+            ColorScheme::Dark,
+        )
+        .unwrap();
+        terminal.push_live(CountingBlock {
+            renders: Rc::clone(&renders),
+        });
+
+        terminal.render().unwrap();
+        assert_eq!(&terminal.committed_frame[0], "19:Dark");
+        assert_eq!(renders.get(), 1);
+
+        terminal.backend.calls.clear();
+        terminal.set_color_scheme(ColorScheme::Dark);
+        terminal.render().unwrap();
+        assert_eq!(renders.get(), 1);
+        assert!(!terminal.backend.calls.contains(&"clear_screen".to_owned()));
+
+        terminal.backend.calls.clear();
+        terminal.set_color_scheme(ColorScheme::Light);
+        terminal.render().unwrap();
+        assert_eq!(&terminal.committed_frame[0], "19:Light");
+        assert_eq!(renders.get(), 2);
+        assert_eq!(terminal.backend.calls[0], "clear_screen");
+    }
+
+    #[test]
     fn resize_and_force_redraw_reset_the_screen() {
-        let mut terminal = Terminal::new(MockBackend::default(), size(), position(0, 0)).unwrap();
+        let mut terminal = Terminal::new(
+            MockBackend::default(),
+            size(),
+            position(0, 0),
+            ColorScheme::Dark,
+        )
+        .unwrap();
         terminal.push_live("content");
         terminal.render().unwrap();
 
@@ -542,7 +643,13 @@ mod test {
 
     #[test]
     fn failed_render_is_retried_as_a_full_redraw() {
-        let mut terminal = Terminal::new(MockBackend::default(), size(), position(0, 0)).unwrap();
+        let mut terminal = Terminal::new(
+            MockBackend::default(),
+            size(),
+            position(0, 0),
+            ColorScheme::Dark,
+        )
+        .unwrap();
         terminal.push_live("content");
         terminal.backend.fail_on = Some("write");
 
@@ -559,7 +666,13 @@ mod test {
 
     #[test]
     fn finish_propagates_show_cursor_errors() {
-        let mut terminal = Terminal::new(MockBackend::default(), size(), position(0, 0)).unwrap();
+        let mut terminal = Terminal::new(
+            MockBackend::default(),
+            size(),
+            position(0, 0),
+            ColorScheme::Dark,
+        )
+        .unwrap();
         terminal.backend.fail_on = Some("show_cursor");
 
         assert!(matches!(terminal.finish(), Err(Error::Backend(_))));

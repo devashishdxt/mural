@@ -190,10 +190,16 @@ mod test {
     use std::{borrow::Cow, cell::Cell, rc::Rc};
 
     use super::Region;
-    use crate::block::{Block, RenderContext};
+    use crate::{
+        ColorScheme,
+        block::{Block, RenderContext},
+    };
 
     fn context(width: usize) -> RenderContext {
-        RenderContext { width }
+        RenderContext {
+            width,
+            color_scheme: ColorScheme::Dark,
+        }
     }
 
     struct CountingBlock {
