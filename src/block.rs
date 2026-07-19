@@ -1,7 +1,22 @@
 use std::{any::Any, borrow::Cow};
 
+/// Terminal state available to a block while rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderContext {
+    pub(crate) width: usize,
+}
+
+impl RenderContext {
+    /// Returns the available content width in terminal cells.
+    ///
+    /// This may be zero and can be smaller than the terminal's raw width.
+    pub fn width(&self) -> usize {
+        self.width
+    }
+}
+
 pub trait Block {
-    fn render(&self, width: usize) -> Vec<Cow<'_, str>>;
+    fn render(&self, context: &RenderContext) -> Vec<Cow<'_, str>>;
 
     fn render_every_frame(&self) -> bool {
         false
@@ -9,20 +24,20 @@ pub trait Block {
 }
 
 impl Block for &str {
-    fn render(&self, width: usize) -> Vec<Cow<'_, str>> {
-        drape::wrap(self, width)
+    fn render(&self, context: &RenderContext) -> Vec<Cow<'_, str>> {
+        drape::wrap(self, context.width())
     }
 }
 
 impl Block for String {
-    fn render(&self, width: usize) -> Vec<Cow<'_, str>> {
-        drape::wrap(self.as_str(), width)
+    fn render(&self, context: &RenderContext) -> Vec<Cow<'_, str>> {
+        drape::wrap(self.as_str(), context.width())
     }
 }
 
 impl Block for Cow<'_, str> {
-    fn render(&self, width: usize) -> Vec<Cow<'_, str>> {
-        drape::wrap(self.as_ref(), width)
+    fn render(&self, context: &RenderContext) -> Vec<Cow<'_, str>> {
+        drape::wrap(self.as_ref(), context.width())
     }
 }
 
@@ -50,15 +65,20 @@ where
 mod test {
     use std::borrow::Cow;
 
-    use super::{Block, ErasedBlock};
+    use super::{Block, ErasedBlock, RenderContext};
 
     #[test]
     fn string_types_wrap_text() {
         let borrowed = "hello world";
         let owned = borrowed.to_owned();
         let cow = Cow::Borrowed(borrowed);
+        let context = RenderContext { width: 5 };
 
-        for lines in [borrowed.render(5), owned.render(5), cow.render(5)] {
+        for lines in [
+            borrowed.render(&context),
+            owned.render(&context),
+            cow.render(&context),
+        ] {
             assert_eq!(lines, ["hello", "world"]);
         }
     }

@@ -1,6 +1,12 @@
 use thiserror::Error;
 
-use crate::{backend::Backend, block::Block, frame::Frame, region::Region, renderer::Renderer};
+use crate::{
+    backend::Backend,
+    block::{Block, RenderContext},
+    frame::Frame,
+    region::Region,
+    renderer::Renderer,
+};
 
 #[derive(Debug, Error)]
 pub enum Error<E>
@@ -134,11 +140,6 @@ where
     pub fn resize(&mut self, size: TerminalSize) -> Result<(), Error<B::Error>> {
         validate_size(size)?;
 
-        if size.width != self.size.width {
-            self.live_region.mark_all_dirty();
-            self.pinned_region.mark_all_dirty();
-        }
-
         self.size = size;
         self.needs_full_redraw = true;
 
@@ -162,10 +163,13 @@ where
     }
 
     fn render_frame(&mut self, include_pinned: bool) -> Result<(), Error<B::Error>> {
-        let mut new_frame = self.live_region.render(self.size.width.saturating_sub(1));
+        let context = RenderContext {
+            width: self.size.width.saturating_sub(1),
+        };
+        let mut new_frame = self.live_region.render(&context);
 
         if include_pinned {
-            new_frame.extend(self.pinned_region.render(self.size.width.saturating_sub(1)));
+            new_frame.extend(self.pinned_region.render(&context));
         }
 
         self.sentinel_row = match Renderer::new(
@@ -237,10 +241,28 @@ fn normalize_initial_position<B: Backend>(
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test {
-    use std::io;
+    use std::{borrow::Cow, cell::Cell, io, rc::Rc};
 
     use super::{CursorPosition, Error, Terminal, TerminalSize};
-    use crate::backend::Backend;
+    use crate::{
+        backend::Backend,
+        block::{Block, RenderContext},
+    };
+
+    fn context(width: usize) -> RenderContext {
+        RenderContext { width }
+    }
+
+    struct CountingBlock {
+        renders: Rc<Cell<usize>>,
+    }
+
+    impl Block for CountingBlock {
+        fn render(&self, context: &RenderContext) -> Vec<Cow<'_, str>> {
+            self.renders.set(self.renders.get() + 1);
+            vec![Cow::Owned(context.width().to_string())]
+        }
+    }
 
     #[derive(Default)]
     struct MockBackend {
@@ -411,14 +433,14 @@ mod test {
 
         terminal.clear_live();
         terminal.clear_pinned();
-        assert_eq!(terminal.live_region.render(10).len(), 0);
-        assert_eq!(terminal.pinned_region.render(10).len(), 0);
+        assert_eq!(terminal.live_region.render(&context(10)).len(), 0);
+        assert_eq!(terminal.pinned_region.render(&context(10)).len(), 0);
 
         terminal.push_live("live");
         terminal.push_pinned("pinned");
         terminal.clear_all();
-        assert_eq!(terminal.live_region.render(10).len(), 0);
-        assert_eq!(terminal.pinned_region.render(10).len(), 0);
+        assert_eq!(terminal.live_region.render(&context(10)).len(), 0);
+        assert_eq!(terminal.pinned_region.render(&context(10)).len(), 0);
     }
 
     #[test]
@@ -448,6 +470,36 @@ mod test {
                 .calls
                 .ends_with(&["show_cursor".to_owned(), "flush".to_owned()])
         );
+    }
+
+    #[test]
+    fn resize_rerenders_blocks_only_when_width_changes() {
+        let renders = Rc::new(Cell::new(0));
+        let mut terminal = Terminal::new(MockBackend::default(), size(), position(0, 0)).unwrap();
+        terminal.push_live(CountingBlock {
+            renders: Rc::clone(&renders),
+        });
+
+        terminal.render().unwrap();
+        assert_eq!(renders.get(), 1);
+
+        terminal
+            .resize(TerminalSize {
+                height: 6,
+                width: 20,
+            })
+            .unwrap();
+        terminal.render().unwrap();
+        assert_eq!(renders.get(), 1);
+
+        terminal
+            .resize(TerminalSize {
+                height: 6,
+                width: 10,
+            })
+            .unwrap();
+        terminal.render().unwrap();
+        assert_eq!(renders.get(), 2);
     }
 
     #[test]

@@ -12,7 +12,7 @@ mod terminal;
 
 pub use self::{
     backend::{Backend, BackendProbe, TerminaBackend},
-    block::Block,
+    block::{Block, RenderContext},
     color_scheme::ColorScheme,
     terminal::{CursorPosition, Error, Terminal, TerminalSize},
 };

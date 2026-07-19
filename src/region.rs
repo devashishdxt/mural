@@ -1,14 +1,14 @@
 use std::rc::Rc;
 
 use crate::{
-    block::{Block, ErasedBlock},
+    block::{Block, ErasedBlock, RenderContext},
     frame::{Frame, RenderedLines},
 };
 
 struct CachedBlock {
     block: Box<dyn ErasedBlock>,
     dirty: bool,
-    width: Option<usize>,
+    context: Option<RenderContext>,
     lines: Rc<RenderedLines>,
 }
 
@@ -17,7 +17,7 @@ impl CachedBlock {
         Self {
             block: Box::new(block),
             dirty: true,
-            width: None,
+            context: None,
             lines: Rc::new(Vec::new()),
         }
     }
@@ -41,16 +41,16 @@ impl CachedBlock {
         self.block.as_any_mut().downcast_mut()
     }
 
-    fn render(&mut self, width: usize) -> Rc<RenderedLines> {
-        if self.should_render(width) {
-            self.refresh(width);
+    fn render(&mut self, context: &RenderContext) -> Rc<RenderedLines> {
+        if self.should_render(context) {
+            self.refresh(context);
         }
 
         Rc::clone(&self.lines)
     }
 
-    fn refresh(&mut self, width: usize) {
-        let rendered_lines = self.block.render(width);
+    fn refresh(&mut self, context: &RenderContext) {
+        let rendered_lines = self.block.render(context);
 
         debug_assert!(
             rendered_lines
@@ -64,11 +64,11 @@ impl CachedBlock {
                 .map(|line| line.into_owned())
                 .collect(),
         );
-        self.width = Some(width);
+        self.context = Some(*context);
     }
 
-    fn should_render(&self, width: usize) -> bool {
-        self.dirty || self.width != Some(width) || self.block.render_every_frame()
+    fn should_render(&self, context: &RenderContext) -> bool {
+        self.dirty || self.context.as_ref() != Some(context) || self.block.render_every_frame()
     }
 
     fn mark_dirty(&mut self) {
@@ -76,7 +76,7 @@ impl CachedBlock {
     }
 
     fn mark_clean(&mut self) {
-        if self.width.is_some() {
+        if self.context.is_some() {
             self.dirty = false;
         }
     }
@@ -154,21 +154,15 @@ impl Region {
         }
     }
 
-    pub fn render(&mut self, width: usize) -> Frame {
+    pub fn render(&mut self, context: &RenderContext) -> Frame {
         self.entries
             .iter_mut()
-            .map(|entry| entry.block.render(width))
+            .map(|entry| entry.block.render(context))
             .collect()
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
-    }
-
-    pub fn mark_all_dirty(&mut self) {
-        self.entries
-            .iter_mut()
-            .for_each(|entry| entry.block.mark_dirty());
     }
 
     pub fn mark_all_clean(&mut self) {
@@ -196,7 +190,11 @@ mod test {
     use std::{borrow::Cow, cell::Cell, rc::Rc};
 
     use super::Region;
-    use crate::block::Block;
+    use crate::block::{Block, RenderContext};
+
+    fn context(width: usize) -> RenderContext {
+        RenderContext { width }
+    }
 
     struct CountingBlock {
         text: String,
@@ -215,9 +213,9 @@ mod test {
     }
 
     impl Block for CountingBlock {
-        fn render(&self, width: usize) -> Vec<Cow<'_, str>> {
+        fn render(&self, context: &RenderContext) -> Vec<Cow<'_, str>> {
             self.renders.set(self.renders.get() + 1);
-            vec![Cow::Owned(format!("{}:{width}", self.text))]
+            vec![Cow::Owned(format!("{}:{}", self.text, context.width()))]
         }
 
         fn render_every_frame(&self) -> bool {
@@ -231,19 +229,21 @@ mod test {
         let mut region = Region::default();
         region.push(CountingBlock::new("block", &renders));
 
-        assert_eq!(region.render(10).iter().collect::<Vec<_>>(), ["block:10"]);
+        assert_eq!(
+            region.render(&context(10)).iter().collect::<Vec<_>>(),
+            ["block:10"]
+        );
         assert_eq!(renders.get(), 1);
 
         region.mark_all_clean();
-        region.render(10);
+        region.render(&context(10));
         assert_eq!(renders.get(), 1);
 
-        region.render(20);
+        region.render(&context(20));
         assert_eq!(renders.get(), 2);
 
-        region.mark_all_dirty();
-        region.render(20);
-        assert_eq!(renders.get(), 3);
+        region.render(&context(20));
+        assert_eq!(renders.get(), 2);
     }
 
     #[test]
@@ -254,9 +254,9 @@ mod test {
         let mut region = Region::default();
         region.push(block);
 
-        region.render(10);
+        region.render(&context(10));
         region.mark_all_clean();
-        region.render(10);
+        region.render(&context(10));
 
         assert_eq!(renders.get(), 2);
     }
@@ -268,8 +268,8 @@ mod test {
         region.push(CountingBlock::new("block", &renders));
 
         region.mark_all_clean();
-        region.render(10);
-        region.render(10);
+        region.render(&context(10));
+        region.render(&context(10));
 
         assert_eq!(renders.get(), 2);
     }
@@ -279,7 +279,7 @@ mod test {
         let renders = Rc::new(Cell::new(0));
         let mut region = Region::default();
         region.insert("status", CountingBlock::new("before", &renders));
-        region.render(10);
+        region.render(&context(10));
         region.mark_all_clean();
 
         assert_eq!(
@@ -291,7 +291,10 @@ mod test {
         assert!(region.get_mut::<String>("status").is_none());
 
         region.get_mut::<CountingBlock>("status").unwrap().text = "after".to_owned();
-        assert_eq!(region.render(10).iter().collect::<Vec<_>>(), ["after:10"]);
+        assert_eq!(
+            region.render(&context(10)).iter().collect::<Vec<_>>(),
+            ["after:10"]
+        );
         assert_eq!(renders.get(), 2);
     }
 
@@ -306,7 +309,7 @@ mod test {
         assert!(region.get::<CountingBlock>("status").is_none());
         assert_eq!(region.get::<String>("status").unwrap(), "new");
         assert_eq!(
-            region.render(20).iter().collect::<Vec<_>>(),
+            region.render(&context(20)).iter().collect::<Vec<_>>(),
             ["first", "new"]
         );
     }
@@ -321,11 +324,11 @@ mod test {
         region.remove("missing");
         region.remove("one");
         assert_eq!(
-            region.render(20).iter().collect::<Vec<_>>(),
+            region.render(&context(20)).iter().collect::<Vec<_>>(),
             ["anonymous", "another"]
         );
 
         region.clear();
-        assert_eq!(region.render(20).len(), 0);
+        assert_eq!(region.render(&context(20)).len(), 0);
     }
 }
