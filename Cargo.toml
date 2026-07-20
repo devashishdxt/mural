@@ -1,5 +1,5 @@
 [workspace]
-members = ["mural-core"]
+members = ["mural","mural-core"]
 resolver = "3"
 
 [workspace.package]
