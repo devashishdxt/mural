@@ -1,20 +1,19 @@
-[package]
-name = "mural"
+[workspace]
+members = ["mural-core"]
+resolver = "3"
+
+[workspace.package]
 version = "0.3.0"
 edition = "2024"
 authors = ["Devashish Dixit <devashishdxt@gmail.com>"]
-description = "Conversational terminal rendering for command-line applications."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/devashishdxt/mural"
-documentation = "https://docs.rs/mural"
-keywords = ["terminal", "tui", "renderer", "ansi", "conversation"]
-categories = ["command-line-interface"]
 
-[dependencies]
+[workspace.dependencies]
 drape = "0.1"
 similar = "3"
 termina = "0.3"
 thiserror = "2"
 
-[lints.rust]
+[workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }

@@ -4,24 +4,24 @@ _default:
 
 # Format Rust code
 fmt:
-    cargo fmt
+    cargo fmt --all
 
 # Run unit and doc tests
 test:
-    cargo test
+    cargo test --workspace
 
 # Run Clippy with warnings denied
 clippy:
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Build crate documentation with rustdoc warnings denied
 doc:
-    RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
+    RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
 
 # Generate LCOV coverage data for tools such as cargo-crap (requires nightly)
 coverage-lcov:
     mkdir -p target/llvm-cov
-    cargo +nightly llvm-cov --lcov --output-path target/llvm-cov/lcov.info
+    cargo +nightly llvm-cov --workspace --lcov --output-path target/llvm-cov/lcov.info
 
 # Report coverage summary excluding inline test modules (requires nightly)
 coverage: coverage-lcov
@@ -29,7 +29,7 @@ coverage: coverage-lcov
 
 # Generate an HTML coverage report excluding inline test modules (requires nightly)
 coverage-html:
-    cargo +nightly llvm-cov --html
+    cargo +nightly llvm-cov --workspace --html
 
 # Open the HTML coverage report
 coverage-report:

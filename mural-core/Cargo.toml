@@ -1,0 +1,20 @@
+[package]
+name = "mural-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Conversational terminal rendering for command-line applications."
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/mural-core"
+keywords = ["terminal", "tui", "renderer", "ansi", "conversation"]
+categories = ["command-line-interface"]
+
+[dependencies]
+drape.workspace = true
+similar.workspace = true
+termina.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
