@@ -6,9 +6,24 @@ use mural_core::{Block, RenderContext};
 
 use crate::{
     editing,
+    key::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyOutcome},
     layout::{CursorTarget, Layout, WrapAffinity},
     rendering::{self, MaximumHeight},
 };
+
+const COMMAND_MODIFIERS: KeyModifiers = KeyModifiers::ALT
+    .union(KeyModifiers::CONTROL)
+    .union(KeyModifiers::SUPER)
+    .union(KeyModifiers::META)
+    .union(KeyModifiers::HYPER);
+const CONTROL_SHORTCUT_CONFLICTS: KeyModifiers = KeyModifiers::ALT
+    .union(KeyModifiers::SUPER)
+    .union(KeyModifiers::META)
+    .union(KeyModifiers::HYPER);
+const ALT_SHORTCUT_CONFLICTS: KeyModifiers = KeyModifiers::CONTROL
+    .union(KeyModifiers::SUPER)
+    .union(KeyModifiers::META)
+    .union(KeyModifiers::HYPER);
 
 #[derive(Debug, Clone, Copy)]
 enum VisualBoundary {
@@ -161,6 +176,20 @@ impl Textarea {
         self
     }
 
+    /// Applies Mural's fixed default textarea behavior for a semantic key event.
+    ///
+    /// Press and repeat events are handled identically, while releases are ignored. Width-aware
+    /// movement uses the most recently rendered width. Applications can pre-handle custom
+    /// shortcuts and call the public editing or navigation primitives instead.
+    pub fn handle_key_event(&mut self, event: impl Into<KeyEvent>) -> KeyOutcome {
+        let event = event.into();
+        if event.kind() == KeyEventKind::Release {
+            return KeyOutcome::Ignored;
+        }
+
+        self.handle_pressed_key(event.code(), event.modifiers())
+    }
+
     /// Moves the cursor left by one grapheme using the last remembered render width.
     ///
     /// Before a width has been remembered, navigation is unwrapped except at
@@ -309,6 +338,80 @@ impl Textarea {
         self.move_to_visual_boundary(width, VisualBoundary::End)
     }
 
+    fn handle_pressed_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyOutcome {
+        match code {
+            KeyCode::Char('a' | 'A') if is_control_shortcut(modifiers) => {
+                self.changed_by(Self::move_to_line_start)
+            }
+            KeyCode::Char('e' | 'E') if is_control_shortcut(modifiers) => {
+                self.changed_by(Self::move_to_line_end)
+            }
+            KeyCode::Char('b' | 'B') if is_alt_shortcut(modifiers) => {
+                self.changed_by(Self::move_word_left)
+            }
+            KeyCode::Char('f' | 'F') if is_alt_shortcut(modifiers) => {
+                self.changed_by(Self::move_word_right)
+            }
+            KeyCode::Char(character) if !modifiers.intersects(COMMAND_MODIFIERS) => {
+                self.changed_by(|textarea| textarea.insert_char(character))
+            }
+            KeyCode::Enter if modifiers.is_empty() => KeyOutcome::Submit,
+            KeyCode::Enter
+                if !modifiers.intersects(
+                    KeyModifiers::CONTROL
+                        .union(KeyModifiers::SUPER)
+                        .union(KeyModifiers::META)
+                        .union(KeyModifiers::HYPER),
+                ) && modifiers.intersects(KeyModifiers::SHIFT.union(KeyModifiers::ALT)) =>
+            {
+                self.changed_by(Self::insert_newline)
+            }
+            KeyCode::Backspace => self.changed_by(Self::backspace),
+            KeyCode::Delete => self.changed_by(Self::delete),
+            KeyCode::Left
+                if modifiers.intersects(KeyModifiers::CONTROL.union(KeyModifiers::ALT)) =>
+            {
+                self.changed_by(Self::move_word_left)
+            }
+            KeyCode::Right
+                if modifiers.intersects(KeyModifiers::CONTROL.union(KeyModifiers::ALT)) =>
+            {
+                self.changed_by(Self::move_word_right)
+            }
+            KeyCode::Left => self.changed_by(Self::move_left),
+            KeyCode::Right => self.changed_by(Self::move_right),
+            KeyCode::Up => self.changed_by(Self::move_visual_up),
+            KeyCode::Down => self.changed_by(Self::move_visual_down),
+            KeyCode::Home if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.changed_by(Self::move_to_buffer_start)
+            }
+            KeyCode::End if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.changed_by(Self::move_to_buffer_end)
+            }
+            KeyCode::Home => self.changed_by(Self::move_to_visual_row_start),
+            KeyCode::End => self.changed_by(Self::move_to_visual_row_end),
+            KeyCode::Tab => self.changed_by(|textarea| textarea.insert_char('\t')),
+            KeyCode::Char(_) | KeyCode::Enter => KeyOutcome::Ignored,
+            _ => KeyOutcome::Ignored,
+        }
+    }
+
+    fn changed_by(&mut self, action: impl FnOnce(&mut Self) -> &mut Self) -> KeyOutcome {
+        let previous_value = self.value.clone();
+        let previous_cursor = self.cursor;
+        let previous_affinity = self.cursor_affinity;
+        action(self);
+
+        if self.value == previous_value
+            && self.cursor == previous_cursor
+            && self.cursor_affinity == previous_affinity
+        {
+            KeyOutcome::Unchanged
+        } else {
+            KeyOutcome::Changed
+        }
+    }
+
     fn move_visual_rows(&mut self, width: usize, delta: isize) -> &mut Self {
         let layout = Layout::new(&self.value, Self::navigation_layout_width(width));
         let Some(position) = layout.source_to_visual(self.cursor, self.cursor_affinity) else {
@@ -407,6 +510,14 @@ impl Textarea {
         self.reset_after_direct_cursor_change();
         self.reset_viewport();
     }
+}
+
+fn is_control_shortcut(modifiers: KeyModifiers) -> bool {
+    modifiers.contains(KeyModifiers::CONTROL) && !modifiers.intersects(CONTROL_SHORTCUT_CONFLICTS)
+}
+
+fn is_alt_shortcut(modifiers: KeyModifiers) -> bool {
+    modifiers.contains(KeyModifiers::ALT) && !modifiers.intersects(ALT_SHORTCUT_CONFLICTS)
 }
 
 impl Block for Textarea {
@@ -657,6 +768,55 @@ mod tests {
         scrolled.set_cursor(usize::MAX).render_lines(4);
         let unscrolled = Textarea::from("0\n1\n2").max_height(1);
         assert_ne!(scrolled, unscrolled);
+    }
+
+    #[test]
+    fn key_dispatch_uses_remembered_width_and_reports_affinity_only_changes() {
+        let mut vertical = Textarea::from("abcdef");
+        vertical.remember_render_width(4);
+        assert_eq!(
+            vertical.handle_key_event(KeyEvent::new(KeyCode::Down)),
+            KeyOutcome::Changed
+        );
+        assert_eq!(vertical.cursor(), 3);
+        assert_eq!(
+            vertical.handle_key_event(KeyEvent::new(KeyCode::Home)),
+            KeyOutcome::Unchanged
+        );
+        assert_eq!(vertical.cursor(), 3);
+        assert_eq!(
+            vertical.handle_key_event(KeyEvent::new(KeyCode::End)),
+            KeyOutcome::Changed
+        );
+        assert_eq!(vertical.cursor(), 6);
+
+        let mut affinity = Textarea::from("abcd");
+        affinity.remember_render_width(4);
+        affinity.set_cursor(2).move_right();
+        let previous = affinity.clone();
+        let cursor = affinity.cursor();
+
+        assert_eq!(
+            affinity.handle_key_event(KeyEvent::new(KeyCode::Right)),
+            KeyOutcome::Changed
+        );
+        assert_eq!(affinity.value(), previous.value());
+        assert_eq!(affinity.cursor(), cursor);
+        assert_ne!(affinity, previous);
+    }
+
+    #[test]
+    fn plain_enter_submits_without_mutating_viewport_or_navigation_state() {
+        let mut textarea = Textarea::from("0\n1\n2\n3\n4").max_height(2);
+        textarea.set_cursor(usize::MAX);
+        textarea.render_lines(4);
+        let before = textarea.clone();
+
+        assert_eq!(
+            textarea.handle_key_event(KeyEvent::new(KeyCode::Enter)),
+            KeyOutcome::Submit
+        );
+        assert_eq!(textarea, before);
     }
 
     #[test]
