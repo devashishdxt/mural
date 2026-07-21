@@ -7,7 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+ansi-str.workspace = true
 termina.workspace = true
+unicode-segmentation.workspace = true
 
 [lints]
 workspace = true

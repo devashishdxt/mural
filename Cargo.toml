@@ -10,10 +10,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/devashishdxt/mural"
 
 [workspace.dependencies]
+ansi-str = "0.9"
 drape = "0.1"
 similar = "3"
 termina = "0.3"
 thiserror = "2"
+unicode-segmentation = "1.13"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }

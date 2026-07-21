@@ -2,4 +2,10 @@
 
 #![warn(missing_docs)]
 
+// This crate-private contract is consumed by the textarea state introduced in the next ticket.
+#[allow(
+    dead_code,
+    reason = "editing is an independently delivered prerequisite"
+)]
+pub(crate) mod editing;
 pub mod key;
