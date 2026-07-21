@@ -11,7 +11,8 @@ pub(crate) mod editing;
 pub mod key;
 #[allow(
     dead_code,
-    reason = "layout is an independently delivered prerequisite"
+    reason = "layout source metadata is retained as a cohesive internal contract"
 )]
 pub(crate) mod layout;
+pub(crate) mod rendering;
 pub mod widget;

@@ -1,10 +1,13 @@
 //! High-level terminal widgets.
 
-use std::cell::Cell;
+use std::{borrow::Cow, cell::Cell};
+
+use mural_core::{Block, RenderContext};
 
 use crate::{
     editing,
     layout::{CursorTarget, Layout, WrapAffinity},
+    rendering::{self, MaximumHeight},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -25,6 +28,9 @@ pub struct Textarea {
     cursor: usize,
     cursor_affinity: WrapAffinity,
     preferred_visual_column: Option<usize>,
+    maximum_height: MaximumHeight,
+    scroll_row: Cell<usize>,
+    scroll_width: Cell<Option<usize>>,
     remembered_render_width: Cell<Option<usize>>,
 }
 
@@ -33,6 +39,24 @@ impl Textarea {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Constrains rendering to at most `maximum` visual rows.
+    ///
+    /// A maximum of zero is clamped to one.
+    #[must_use]
+    pub fn max_height(mut self, maximum: usize) -> Self {
+        self.maximum_height = MaximumHeight::Limited(maximum.max(1));
+        self.reset_viewport();
+        self
+    }
+
+    /// Removes the visual-row limit so every laid-out row is rendered.
+    #[must_use]
+    pub fn unlimited_height(mut self) -> Self {
+        self.maximum_height = MaximumHeight::Unlimited;
+        self.reset_viewport();
+        self
     }
 
     /// Returns the sanitized textarea value without permitting invariant-breaking mutation.
@@ -349,12 +373,29 @@ impl Textarea {
         self.remembered_render_width.get().unwrap_or(usize::MAX)
     }
 
-    #[allow(
-        dead_code,
-        reason = "rendering is delivered by the dependent software-cursor ticket"
-    )]
     pub(crate) fn remember_render_width(&self, width: usize) {
         self.remembered_render_width.set(Some(width));
+    }
+
+    fn render_lines(&self, width: usize) -> Vec<String> {
+        self.remember_render_width(width);
+        let layout = Layout::new(&self.value, width);
+        let rendered = rendering::render(
+            &layout,
+            self.cursor,
+            self.cursor_affinity,
+            self.maximum_height,
+            self.scroll_row.get(),
+            self.scroll_width.get(),
+        );
+        self.scroll_row.set(rendered.scroll_row);
+        self.scroll_width.set(rendered.scroll_width);
+        rendered.lines
+    }
+
+    fn reset_viewport(&self) {
+        self.scroll_row.set(0);
+        self.scroll_width.set(None);
     }
 
     fn reset_after_direct_cursor_change(&mut self) {
@@ -364,6 +405,16 @@ impl Textarea {
 
     fn reset_after_replacement(&mut self) {
         self.reset_after_direct_cursor_change();
+        self.reset_viewport();
+    }
+}
+
+impl Block for Textarea {
+    fn render(&self, context: &RenderContext) -> Vec<Cow<'_, str>> {
+        self.render_lines(context.width())
+            .into_iter()
+            .map(Cow::Owned)
+            .collect()
     }
 }
 
@@ -474,6 +525,162 @@ mod tests {
         let remembered = baseline.clone();
         remembered.remember_render_width(4);
         assert_ne!(baseline, remembered);
+    }
+
+    #[test]
+    fn software_cursor_covers_semantic_content_positions() {
+        let mut normal = Textarea::from("ab");
+        assert_eq!(marked(normal.render_lines(4)), ["<a>b"]);
+
+        normal.set_cursor(usize::MAX);
+        assert_eq!(marked(normal.render_lines(4)), ["ab< >"]);
+
+        let wide = Textarea::from("界x");
+        assert_eq!(marked(wide.render_lines(4)), ["<界>x"]);
+
+        let tab = Textarea::from("\t");
+        assert_eq!(marked(tab.render_lines(6)), ["< >   "]);
+
+        let mut tab_end = Textarea::from("\tb");
+        tab_end.move_right_with_width(5);
+        assert_cursor(&tab_end, 1, WrapAffinity::PreviousRow);
+        assert_eq!(marked(tab_end.render_lines(5)), ["   < >", "b"]);
+
+        let empty = Textarea::new();
+        assert_eq!(marked(empty.render_lines(4)), ["< >"]);
+
+        let mut hidden = Textarea::from("one   two");
+        hidden.set_cursor(4);
+        assert_eq!(marked(hidden.render_lines(7)), ["one< >", "two"]);
+
+        let zero_width = Textarea::from("\u{200b}");
+        assert_eq!(marked(zero_width.render_lines(2)), ["\u{200b}< >"]);
+    }
+
+    #[test]
+    fn narrow_widths_and_split_tabs_never_overflow() {
+        use ansi_str::AnsiStr;
+        use unicode_width::UnicodeWidthStr;
+
+        let textarea = Textarea::from("content");
+        assert!(textarea.render_lines(0).is_empty());
+        assert_eq!(textarea.remembered_render_width.get(), Some(0));
+        assert_eq!(marked(textarea.render_lines(1)), ["< >"]);
+
+        let wide = Textarea::from("界");
+        assert_eq!(marked(wide.render_lines(2)), ["<界>", ""]);
+
+        let tab = Textarea::from("\t").unlimited_height();
+        let rows = tab.render_lines(2);
+        assert_eq!(rows.len(), 4);
+        for row in rows {
+            assert!(UnicodeWidthStr::width(row.ansi_strip().as_ref()) <= 2);
+        }
+    }
+
+    #[test]
+    fn height_builders_and_sticky_viewport_select_expected_rows() {
+        let value = "0\n1\n2\n3\n4\n5\n6\n7";
+        let default = Textarea::from(value);
+        assert_eq!(default.render_lines(10).len(), 6);
+        assert_eq!(
+            Textarea::from(value).max_height(2).render_lines(10).len(),
+            2
+        );
+        assert_eq!(
+            Textarea::from(value).max_height(0).render_lines(10).len(),
+            1
+        );
+        assert_eq!(
+            Textarea::from(value)
+                .unlimited_height()
+                .render_lines(10)
+                .len(),
+            8
+        );
+
+        let mut sticky = Textarea::from(value).max_height(3);
+        sticky.set_cursor(usize::MAX);
+        assert_eq!(plain(sticky.render_lines(10)), ["5", "6", "7 "]);
+        assert_eq!(sticky.scroll_row.get(), 5);
+
+        sticky.set_cursor(6);
+        assert_eq!(plain(sticky.render_lines(10)), ["3", "4", "5"]);
+        assert_eq!(sticky.scroll_row.get(), 3);
+
+        sticky.set_cursor(8);
+        assert_eq!(plain(sticky.render_lines(10)), ["3", "4", "5"]);
+        assert_eq!(sticky.scroll_row.get(), 3);
+    }
+
+    #[test]
+    fn viewport_clamps_on_width_changes_and_resets_on_value_replacement() {
+        let mut textarea = Textarea::from("abcdef").max_height(2);
+        textarea.set_cursor(usize::MAX);
+        textarea.render_lines(2);
+        assert!(textarea.scroll_row.get() > 0);
+        assert_eq!(textarea.scroll_width.get(), Some(2));
+
+        textarea.render_lines(10);
+        assert_eq!(textarea.scroll_row.get(), 0);
+        assert_eq!(textarea.scroll_width.get(), Some(10));
+
+        textarea.render_lines(2);
+        assert!(textarea.scroll_row.get() > 0);
+        textarea.set_value("new");
+        assert_eq!(textarea.scroll_row.get(), 0);
+        assert_eq!(textarea.scroll_width.get(), None);
+        assert_eq!(textarea.remembered_render_width.get(), Some(2));
+
+        textarea.set_cursor(usize::MAX).render_lines(2);
+        textarea.clear();
+        assert_eq!(textarea.scroll_row.get(), 0);
+        textarea
+            .set_value("again")
+            .set_cursor(usize::MAX)
+            .render_lines(2);
+        assert_eq!(textarea.take(), "again");
+        assert_eq!(textarea.scroll_row.get(), 0);
+    }
+
+    #[test]
+    fn equality_includes_height_and_viewport_state() {
+        let baseline = Textarea::from("a\nb");
+        assert_ne!(baseline, baseline.clone().max_height(2));
+        assert_ne!(baseline, baseline.clone().unlimited_height());
+
+        let rendered = baseline.clone();
+        rendered.render_lines(4);
+        assert_ne!(baseline, rendered);
+
+        let mut scrolled = Textarea::from("0\n1\n2").max_height(1);
+        scrolled.set_cursor(usize::MAX).render_lines(4);
+        let unscrolled = Textarea::from("0\n1\n2").max_height(1);
+        assert_ne!(scrolled, unscrolled);
+    }
+
+    #[test]
+    fn textarea_uses_the_block_default_render_policy() {
+        fn assert_block<T: Block>() {}
+
+        assert_block::<Textarea>();
+        assert!(!Textarea::new().render_every_frame());
+    }
+
+    fn marked(lines: Vec<String>) -> Vec<String> {
+        lines
+            .into_iter()
+            .map(|line| line.replace("\x1b[7m", "<").replace("\x1b[27m", ">"))
+            .collect()
+    }
+
+    fn plain(lines: Vec<String>) -> Vec<String> {
+        use ansi_str::AnsiStr;
+
+        lines
+            .into_iter()
+            .map(|line| line.ansi_strip().into_owned())
+            .collect()
     }
 
     fn assert_cursor(textarea: &Textarea, cursor: usize, affinity: WrapAffinity) {

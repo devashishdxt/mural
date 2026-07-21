@@ -118,6 +118,7 @@ name = "mural"
 version = "0.3.0"
 dependencies = [
  "ansi-str",
+ "mural-core",
  "termina",
  "textwrap",
  "unicode-segmentation",
