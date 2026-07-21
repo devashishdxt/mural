@@ -20,6 +20,7 @@ use crate::{
     key::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyOutcome},
 };
 
+const HORIZONTAL_RULE: char = '─';
 const COMMAND_MODIFIERS: KeyModifiers = KeyModifiers::ALT
     .union(KeyModifiers::CONTROL)
     .union(KeyModifiers::SUPER)
@@ -52,10 +53,11 @@ enum VisualBoundary {
 /// viewport follows the cursor. [`Self::max_height`] changes that limit and
 /// [`Self::unlimited_height`] removes it.
 ///
-/// Rendering includes a fixed reverse-video software block cursor. The cursor covers the grapheme
-/// under the byte cursor, or a reserved space at an empty or end-of-value position. The effect is
-/// reset on the same output line and user-supplied terminal escapes cannot reach rendered output
-/// because all value entry points sanitize their input.
+/// Rendering surrounds the text rows with full-width, unstyled horizontal rules and includes a
+/// fixed reverse-video software block cursor. The cursor covers the grapheme under the byte cursor,
+/// or a reserved space at an empty or end-of-value position. The effect is reset on the same output
+/// line and user-supplied terminal escapes cannot reach rendered output because all value entry
+/// points sanitize their input.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Textarea {
     value: String,
@@ -557,10 +559,18 @@ fn is_alt_shortcut(modifiers: KeyModifiers) -> bool {
 
 impl Block for Textarea {
     fn render(&self, context: &RenderContext) -> Vec<Cow<'_, str>> {
-        self.render_lines(context.width())
-            .into_iter()
-            .map(Cow::Owned)
-            .collect()
+        let width = context.width();
+        let content = self.render_lines(width);
+        if width == 0 {
+            return Vec::new();
+        }
+
+        let rule: String = std::iter::repeat_n(HORIZONTAL_RULE, width).collect();
+        let mut lines = Vec::with_capacity(content.len() + 2);
+        lines.push(Cow::Owned(rule.clone()));
+        lines.extend(content.into_iter().map(Cow::Owned));
+        lines.push(Cow::Owned(rule));
+        lines
     }
 }
 
@@ -852,6 +862,31 @@ mod tests {
             KeyOutcome::Submit
         );
         assert_eq!(textarea, before);
+    }
+
+    #[test]
+    fn block_rendering_surrounds_content_with_unstyled_horizontal_rules() {
+        let context = RenderContext {
+            width: 4,
+            color_scheme: crate::ColorScheme::Dark,
+        };
+
+        assert_eq!(
+            Textarea::from("ab").render(&context),
+            ["────", "\x1b[7ma\x1b[27mb", "────"]
+        );
+    }
+
+    #[test]
+    fn zero_width_block_rendering_stays_empty_and_remembers_the_width() {
+        let textarea = Textarea::new();
+        let context = RenderContext {
+            width: 0,
+            color_scheme: crate::ColorScheme::Dark,
+        };
+
+        assert!(textarea.render(&context).is_empty());
+        assert_eq!(textarea.remembered_render_width.get(), Some(0));
     }
 
     #[test]
