@@ -14,7 +14,7 @@ use std::ops::{BitOr, BitOrAssign};
 /// Termina's representation.
 ///
 /// ```
-/// use mural::key::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+/// use mural_core::key::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 ///
 /// let event = KeyEvent::new(KeyCode::Char('x'))
 ///     .with_modifier(KeyModifiers::CONTROL)

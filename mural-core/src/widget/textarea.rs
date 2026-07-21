@@ -5,15 +5,19 @@
 //! argument for one operation and leaves the remembered width unchanged. Before the first render,
 //! widthless navigation treats text as unwrapped except at explicit line feeds.
 
+mod editing;
+mod layout;
+mod rendering;
+
 use std::{borrow::Cow, cell::Cell};
 
-use mural_core::{Block, RenderContext};
-
-use crate::{
-    editing,
-    key::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyOutcome},
+use self::{
     layout::{CursorTarget, Layout, WrapAffinity},
-    rendering::{self, MaximumHeight},
+    rendering::MaximumHeight,
+};
+use crate::{
+    Block, RenderContext,
+    key::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyOutcome},
 };
 
 const COMMAND_MODIFIERS: KeyModifiers = KeyModifiers::ALT
@@ -191,7 +195,7 @@ impl Textarea {
         self
     }
 
-    /// Applies Mural's fixed default textarea behavior for a semantic key event.
+    /// Applies the fixed default textarea behavior for a semantic key event.
     ///
     /// Press and repeat events are handled identically, while releases are ignored. Width-aware
     /// movement uses the most recently rendered width. Applications can pre-handle custom

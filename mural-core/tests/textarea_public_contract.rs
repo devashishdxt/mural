@@ -1,10 +1,10 @@
 mod support;
 
-use mural::{
+use mural_core::{Block, ColorScheme, CursorPosition, Terminal, TerminalSize};
+use mural_core::{
     key::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyOutcome},
     widget::Textarea,
 };
-use mural_core::{Block, ColorScheme, CursorPosition, Terminal, TerminalSize};
 use support::{RecordingBackend, cursor_contents};
 use termina::event::{
     KeyCode as TerminaCode, KeyEvent as TerminaEvent, KeyEventKind as TerminaKind,

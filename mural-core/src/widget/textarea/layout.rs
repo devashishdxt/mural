@@ -6,7 +6,7 @@ use textwrap::{WordSeparator, WordSplitter, core::Fragment, wrap_algorithms::wra
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::editing;
+use super::editing;
 
 const TAB_WIDTH: usize = 4;
 
@@ -79,7 +79,6 @@ enum CellKind {
 pub(crate) struct Row<'a> {
     cells: Vec<Cell<'a>>,
     content_width: usize,
-    occupied_width: usize,
     hidden: Option<Range<usize>>,
     soft_wrap: bool,
     soft_boundary: Option<usize>,
@@ -93,19 +92,6 @@ impl<'a> Row<'a> {
 
     pub(crate) fn content_width(&self) -> usize {
         self.content_width
-    }
-
-    /// Includes the ordinarily reserved software-cursor column.
-    pub(crate) fn occupied_width(&self) -> usize {
-        self.occupied_width
-    }
-
-    pub(crate) fn hidden_source(&self) -> Option<Range<usize>> {
-        self.hidden.clone()
-    }
-
-    pub(crate) fn is_soft_wrapped(&self) -> bool {
-        self.soft_wrap
     }
 
     pub(crate) fn soft_boundary(&self) -> Option<usize> {
@@ -219,7 +205,6 @@ impl<'a> Layout<'a> {
             self.rows.push(Row {
                 cells: Vec::new(),
                 content_width: 0,
-                occupied_width: 1,
                 hidden: (start < end).then_some(start..end),
                 soft_wrap: false,
                 soft_boundary: None,
@@ -236,7 +221,7 @@ impl<'a> Layout<'a> {
         for (index, fragments) in wrapped.iter().enumerate() {
             let soft_wrap = index + 1 < wrapped.len();
             self.rows
-                .push(row_from_fragments(fragments, soft_wrap, self.width, start));
+                .push(row_from_fragments(fragments, soft_wrap, start));
         }
 
         self.finish_soft_wraps(first_row);
@@ -460,7 +445,6 @@ fn cells_for_range<'a>(text: &'a str, source: Range<usize>) -> Vec<Cell<'a>> {
 fn row_from_fragments<'a>(
     fragments: &[WrapFragment<'a>],
     soft_wrap: bool,
-    width: usize,
     empty_cursor: usize,
 ) -> Row<'a> {
     let mut cells = Vec::new();
@@ -477,15 +461,9 @@ fn row_from_fragments<'a>(
     }
 
     let content_width = cells_width(&cells);
-    let occupied_width = if content_width == width {
-        width
-    } else {
-        content_width + 1
-    };
     Row {
         cells,
         content_width,
-        occupied_width,
         hidden,
         soft_wrap,
         soft_boundary: None,
@@ -497,7 +475,6 @@ fn empty_row(cursor: usize) -> Row<'static> {
     Row {
         cells: Vec::new(),
         content_width: 0,
-        occupied_width: 1,
         hidden: None,
         soft_wrap: false,
         soft_boundary: None,
@@ -648,12 +625,12 @@ mod tests {
     fn separator_spaces_are_hidden_only_when_the_following_word_wraps() {
         let wrapped = Layout::new("one   two", 7);
         assert_eq!(visible_rows(&wrapped), ["one", "two"]);
-        assert_eq!(wrapped.rows()[0].hidden_source(), Some(3..6));
+        assert_eq!(wrapped.rows()[0].hidden, Some(3..6));
         assert_eq!(wrapped.rows()[0].soft_boundary(), Some(6));
 
         let unwrapped = Layout::new("one   two", 10);
         assert_eq!(visible_rows(&unwrapped), ["one   two"]);
-        assert_eq!(unwrapped.rows()[0].hidden_source(), None);
+        assert_eq!(unwrapped.rows()[0].hidden, None);
     }
 
     #[test]
@@ -704,7 +681,7 @@ mod tests {
     fn source_mapping_distinguishes_both_sides_of_soft_wraps() {
         let layout = Layout::new("one two", 6);
         assert_eq!(layout.width(), 6);
-        assert!(layout.rows()[0].is_soft_wrapped());
+        assert!(layout.rows()[0].soft_wrap);
         assert_eq!(
             layout.source_to_visual(4, WrapAffinity::PreviousRow),
             Some(VisualPosition { row: 0, column: 3 })
@@ -768,20 +745,12 @@ mod tests {
 
     #[test]
     fn rows_honor_reservation_and_the_full_width_wide_exception() {
-        for (text, width) in [("abcdef", 4), ("界", 2), ("\t", 2), ("a界b", 3)] {
-            let layout = Layout::new(text, width);
-            assert!(
-                layout
-                    .rows()
-                    .iter()
-                    .all(|row| row.occupied_width() <= width)
-            );
-        }
+        let ordinary = Layout::new("abcdef", 4);
+        assert_eq!(visible_rows(&ordinary), ["abc", "def"]);
 
         let wide = Layout::new("界", 2);
         assert_eq!(visible_rows(&wide), ["界", ""]);
         assert_eq!(wide.rows()[0].content_width(), 2);
-        assert_eq!(wide.rows()[0].occupied_width(), 2);
         assert_eq!(
             wide.source_to_visual("界".len(), WrapAffinity::NextRow),
             Some(VisualPosition { row: 1, column: 0 })
@@ -789,7 +758,6 @@ mod tests {
 
         let one_column = Layout::new("content", 1);
         assert_eq!(visible_rows(&one_column), [""]);
-        assert_eq!(one_column.rows()[0].occupied_width(), 1);
         assert!(Layout::new("content", 0).rows().is_empty());
     }
 

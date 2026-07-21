@@ -1,4 +1,4 @@
-use mural::widget::Textarea;
+use mural_core::widget::Textarea;
 
 #[test]
 fn horizontal_navigation_uses_graphemes_and_unicode_words() {

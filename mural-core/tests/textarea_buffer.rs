@@ -1,4 +1,4 @@
-use mural::widget::Textarea;
+use mural_core::widget::Textarea;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[test]

@@ -114,25 +114,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
-name = "mural"
-version = "0.3.0"
-dependencies = [
- "ansi-str",
- "mural-core",
- "termina",
- "textwrap",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
 name = "mural-core"
 version = "0.3.0"
 dependencies = [
+ "ansi-str",
  "drape",
  "similar",
  "termina",
+ "textwrap",
  "thiserror",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

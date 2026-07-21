@@ -1,6 +1,6 @@
 mod support;
 
-use mural::widget::Textarea;
+use mural_core::widget::Textarea;
 use mural_core::{Block, ColorScheme, CursorPosition, Terminal, TerminalSize};
 use support::{RecordingBackend, cursor_contents};
 

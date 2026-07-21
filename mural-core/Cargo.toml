@@ -11,10 +11,14 @@ keywords = ["terminal", "tui", "renderer", "ansi", "conversation"]
 categories = ["command-line-interface"]
 
 [dependencies]
+ansi-str.workspace = true
 drape.workspace = true
 similar.workspace = true
 termina.workspace = true
+textwrap.workspace = true
 thiserror.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
 
 [lints]
 workspace = true

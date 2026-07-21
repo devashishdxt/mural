@@ -1,4 +1,4 @@
-use mural::{
+use mural_core::{
     key::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyOutcome},
     widget::Textarea,
 };

@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use crate::layout::{Layout, Row, WrapAffinity};
+use super::layout::{Layout, Row, WrapAffinity};
 
 pub(crate) const DEFAULT_MAX_HEIGHT: usize = 6;
 const CURSOR_ON: &str = "\x1b[7m";
