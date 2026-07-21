@@ -119,7 +119,9 @@ version = "0.3.0"
 dependencies = [
  "ansi-str",
  "termina",
+ "textwrap",
  "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

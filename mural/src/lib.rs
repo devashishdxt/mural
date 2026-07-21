@@ -9,3 +9,8 @@
 )]
 pub(crate) mod editing;
 pub mod key;
+#[allow(
+    dead_code,
+    reason = "layout is an independently delivered prerequisite"
+)]
+pub(crate) mod layout;

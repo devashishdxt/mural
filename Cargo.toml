@@ -14,8 +14,10 @@ ansi-str = "0.9"
 drape = "0.1"
 similar = "3"
 termina = "0.3"
+textwrap = "0.16"
 thiserror = "2"
 unicode-segmentation = "1.13"
+unicode-width = "0.2"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
