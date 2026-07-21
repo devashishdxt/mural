@@ -14,3 +14,4 @@ pub mod key;
     reason = "layout is an independently delivered prerequisite"
 )]
 pub(crate) mod layout;
+pub mod widget;
