@@ -1,4 +1,9 @@
 //! Backend-independent keyboard input types for Mural widgets.
+//!
+//! Applications may construct semantic [`KeyEvent`] values directly. A complete
+//! [`termina::event::KeyEvent`] also converts into a Mural event: supported codes, lifecycle kind,
+//! and behavior-affecting modifiers are mapped, while unsupported keys collapse to
+//! [`KeyCode::Unsupported`] and backend-only key state is discarded.
 
 use std::ops::{BitOr, BitOrAssign};
 

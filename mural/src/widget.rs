@@ -1,4 +1,9 @@
 //! High-level terminal widgets.
+//!
+//! [`Textarea`] separates logical editing from rendering. Widthless visual operations use the
+//! width remembered by its most recent [`Block::render`] call; each `_with_width` variant uses its
+//! argument for one operation and leaves the remembered width unchanged. Before the first render,
+//! widthless navigation treats text as unwrapped except at explicit line feeds.
 
 use std::{borrow::Cow, cell::Cell};
 
@@ -37,6 +42,16 @@ enum VisualBoundary {
 /// than line feeds and tabs. Carriage-return line endings are normalized to line
 /// feeds. The cursor is a UTF-8 byte index that is always at an extended grapheme
 /// cluster boundary and never exceeds the value's length.
+///
+/// As a [`Block`], the textarea wraps to the render context's width, remembers that width for later
+/// widthless navigation and key handling, and limits output to six visual rows by default. The
+/// viewport follows the cursor. [`Self::max_height`] changes that limit and
+/// [`Self::unlimited_height`] removes it.
+///
+/// Rendering includes a fixed reverse-video software block cursor. The cursor covers the grapheme
+/// under the byte cursor, or a reserved space at an empty or end-of-value position. The effect is
+/// reset on the same output line and user-supplied terminal escapes cannot reach rendered output
+/// because all value entry points sanitize their input.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Textarea {
     value: String,
@@ -199,6 +214,8 @@ impl Textarea {
     }
 
     /// Moves the cursor left by one grapheme using only `width` for layout.
+    ///
+    /// This one-off calculation does not replace the remembered render width.
     pub fn move_left_with_width(&mut self, width: usize) -> &mut Self {
         let layout = Layout::new(&self.value, Self::navigation_layout_width(width));
         if self.cursor_affinity == WrapAffinity::NextRow
@@ -222,6 +239,8 @@ impl Textarea {
     }
 
     /// Moves the cursor right by one grapheme using only `width` for layout.
+    ///
+    /// This one-off calculation does not replace the remembered render width.
     pub fn move_right_with_width(&mut self, width: usize) -> &mut Self {
         let layout = Layout::new(&self.value, Self::navigation_layout_width(width));
         if self.cursor_affinity == WrapAffinity::PreviousRow
@@ -269,6 +288,8 @@ impl Textarea {
     }
 
     /// Moves to the current source-line end using only `width` for layout.
+    ///
+    /// This one-off calculation does not replace the remembered render width.
     pub fn move_to_line_end_with_width(&mut self, width: usize) -> &mut Self {
         self.cursor = self.value[self.cursor..]
             .find('\n')
@@ -291,6 +312,8 @@ impl Textarea {
     }
 
     /// Moves to the complete-buffer end using only `width` for layout.
+    ///
+    /// This one-off calculation does not replace the remembered render width.
     pub fn move_to_buffer_end_with_width(&mut self, width: usize) -> &mut Self {
         self.cursor = self.value.len();
         self.set_boundary_affinity(width);
@@ -304,6 +327,8 @@ impl Textarea {
     }
 
     /// Moves the cursor one visual row up using only `width` for layout.
+    ///
+    /// This one-off calculation does not replace the remembered render width.
     pub fn move_visual_up_with_width(&mut self, width: usize) -> &mut Self {
         self.move_visual_rows(width, -1)
     }
@@ -314,6 +339,8 @@ impl Textarea {
     }
 
     /// Moves the cursor one visual row down using only `width` for layout.
+    ///
+    /// This one-off calculation does not replace the remembered render width.
     pub fn move_visual_down_with_width(&mut self, width: usize) -> &mut Self {
         self.move_visual_rows(width, 1)
     }
@@ -324,6 +351,8 @@ impl Textarea {
     }
 
     /// Moves to the current visual-row start using only `width` for layout.
+    ///
+    /// This one-off calculation does not replace the remembered render width.
     pub fn move_to_visual_row_start_with_width(&mut self, width: usize) -> &mut Self {
         self.move_to_visual_boundary(width, VisualBoundary::Start)
     }
@@ -334,6 +363,8 @@ impl Textarea {
     }
 
     /// Moves to the current visual-row end using only `width` for layout.
+    ///
+    /// This one-off calculation does not replace the remembered render width.
     pub fn move_to_visual_row_end_with_width(&mut self, width: usize) -> &mut Self {
         self.move_to_visual_boundary(width, VisualBoundary::End)
     }
