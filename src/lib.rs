@@ -10,7 +10,6 @@ mod planner;
 mod region;
 mod renderer;
 mod terminal;
-pub mod widget;
 
 pub use self::{
     backend::{Backend, BackendProbe, TerminaBackend},
