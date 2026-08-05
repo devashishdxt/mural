@@ -5,7 +5,6 @@ mod block;
 mod color_scheme;
 mod differ;
 mod frame;
-pub mod key;
 mod planner;
 mod region;
 mod renderer;
