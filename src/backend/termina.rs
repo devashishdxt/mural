@@ -33,10 +33,12 @@ pub struct TerminaBackend {
 }
 
 impl TerminaBackend {
+    /// Opens the current process terminal and wraps it as a Mural backend.
     pub fn new() -> Result<Self, io::Error> {
         PlatformTerminal::new().map(Into::into)
     }
 
+    /// Returns the underlying Termina platform terminal.
     pub fn into_inner(self) -> PlatformTerminal {
         self.terminal
     }

@@ -9,33 +9,46 @@ use crate::{
     renderer::Renderer,
 };
 
+/// An error encountered while configuring or rendering a terminal.
 #[derive(Debug, Error)]
 pub enum Error<E>
 where
     E: std::error::Error + Send + Sync + 'static,
 {
+    /// The terminal width or height is zero.
     #[error("invalid terminal size: width and height must be greater than zero")]
     InvalidTerminalSize,
 
+    /// The cursor row or column lies outside the terminal.
     #[error("invalid cursor position: row/column must be within terminal size")]
     InvalidCursorPosition,
 
+    /// The backend failed to perform a terminal operation.
     #[error(transparent)]
     Backend(#[from] E),
 }
 
+/// Terminal dimensions measured in character cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalSize {
+    /// The number of terminal rows.
     pub height: usize,
+
+    /// The number of terminal columns.
     pub width: usize,
 }
 
+/// A zero-based cursor position measured in character cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CursorPosition {
+    /// The cursor's zero-based row.
     pub row: usize,
+
+    /// The cursor's zero-based column.
     pub column: usize,
 }
 
+/// An incremental renderer that manages live and pinned terminal blocks.
 pub struct Terminal<B> {
     backend: B,
     live_region: Region,
@@ -51,6 +64,7 @@ impl<B> Terminal<B>
 where
     B: Backend,
 {
+    /// Creates a terminal renderer and hides the backend cursor.
     pub fn new(
         mut backend: B,
         size: TerminalSize,
@@ -76,22 +90,27 @@ where
         })
     }
 
+    /// Appends an anonymous block to the durable live region.
     pub fn push_live(&mut self, block: impl Block + 'static) {
         self.live_region.push(block);
     }
 
+    /// Appends an anonymous block to the temporary pinned region.
     pub fn push_pinned(&mut self, block: impl Block + 'static) {
         self.pinned_region.push(block);
     }
 
+    /// Inserts or replaces an identified block in the live region.
     pub fn insert_live(&mut self, id: impl Into<String>, block: impl Block + 'static) {
         self.live_region.insert(id, block);
     }
 
+    /// Inserts or replaces an identified block in the pinned region.
     pub fn insert_pinned(&mut self, id: impl Into<String>, block: impl Block + 'static) {
         self.pinned_region.insert(id, block);
     }
 
+    /// Returns an identified live block if its concrete type is `T`.
     pub fn get_live<T>(&self, id: impl AsRef<str>) -> Option<&T>
     where
         T: Block + 'static,
@@ -99,6 +118,7 @@ where
         self.live_region.get(id)
     }
 
+    /// Returns an identified pinned block if its concrete type is `T`.
     pub fn get_pinned<T>(&self, id: impl AsRef<str>) -> Option<&T>
     where
         T: Block + 'static,
@@ -106,6 +126,7 @@ where
         self.pinned_region.get(id)
     }
 
+    /// Returns and marks dirty an identified live block if its concrete type is `T`.
     pub fn get_live_mut<T>(&mut self, id: impl AsRef<str>) -> Option<&mut T>
     where
         T: Block + 'static,
@@ -113,6 +134,7 @@ where
         self.live_region.get_mut(id)
     }
 
+    /// Returns and marks dirty an identified pinned block if its concrete type is `T`.
     pub fn get_pinned_mut<T>(&mut self, id: impl AsRef<str>) -> Option<&mut T>
     where
         T: Block + 'static,
@@ -120,27 +142,33 @@ where
         self.pinned_region.get_mut(id)
     }
 
+    /// Removes an identified block from the live region.
     pub fn remove_live(&mut self, id: impl AsRef<str>) {
         self.live_region.remove(id);
     }
 
+    /// Removes an identified block from the pinned region.
     pub fn remove_pinned(&mut self, id: impl AsRef<str>) {
         self.pinned_region.remove(id);
     }
 
+    /// Removes every block from the live region.
     pub fn clear_live(&mut self) {
         self.live_region.clear();
     }
 
+    /// Removes every block from the pinned region.
     pub fn clear_pinned(&mut self) {
         self.pinned_region.clear();
     }
 
+    /// Removes every block from both regions.
     pub fn clear_all(&mut self) {
         self.clear_live();
         self.clear_pinned();
     }
 
+    /// Updates the terminal dimensions and schedules a full redraw.
     pub fn resize(&mut self, size: TerminalSize) -> Result<(), Error<B::Error>> {
         validate_size(size)?;
 
@@ -150,6 +178,7 @@ where
         Ok(())
     }
 
+    /// Updates the preferred color scheme and redraws if it changed.
     pub fn set_color_scheme(&mut self, color_scheme: ColorScheme) {
         if self.color_scheme == color_scheme {
             return;
@@ -159,14 +188,17 @@ where
         self.needs_full_redraw = true;
     }
 
+    /// Schedules the next render to redraw the complete terminal frame.
     pub fn force_full_redraw(&mut self) {
         self.needs_full_redraw = true;
     }
 
+    /// Renders the live and pinned regions and flushes backend output.
     pub fn render(&mut self) -> Result<(), Error<B::Error>> {
         self.render_frame(true)
     }
 
+    /// Renders only the live region, restores the cursor, and flushes backend output.
     pub fn finish(&mut self) -> Result<(), Error<B::Error>> {
         self.render_frame(false)?;
         self.backend.show_cursor()?;

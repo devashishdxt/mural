@@ -8,34 +8,54 @@ use crate::{
     terminal::{CursorPosition, TerminalSize},
 };
 
+/// A terminal output target capable of executing Mural's rendering operations.
 pub trait Backend {
+    /// The error returned by terminal operations.
     type Error: std::error::Error + Send + Sync + 'static;
 
-    // Cursor visibility
+    /// Hides the terminal cursor.
     fn hide_cursor(&mut self) -> Result<(), Self::Error>;
+
+    /// Shows the terminal cursor.
     fn show_cursor(&mut self) -> Result<(), Self::Error>;
 
-    // Cursor movement
+    /// Moves the cursor up by `n` rows.
     fn move_up(&mut self, n: usize) -> Result<(), Self::Error>;
+
+    /// Moves the cursor down by `n` rows.
     fn move_down(&mut self, n: usize) -> Result<(), Self::Error>;
+
+    /// Moves the cursor to the beginning of its current row.
     fn carriage_return(&mut self) -> Result<(), Self::Error>;
+
+    /// Writes a newline, scrolling the viewport when necessary.
     fn newline(&mut self) -> Result<(), Self::Error>;
 
-    // Viewport movement
+    /// Scrolls the viewport up by `n` rows.
     fn scroll_up(&mut self, n: usize) -> Result<(), Self::Error>;
 
-    // Line editing
+    /// Inserts `n` blank lines at the cursor.
     fn insert_lines(&mut self, n: usize) -> Result<(), Self::Error>;
+
+    /// Deletes `n` lines at the cursor.
     fn delete_lines(&mut self, n: usize) -> Result<(), Self::Error>;
+
+    /// Clears the entire row containing the cursor.
     fn clear_line(&mut self) -> Result<(), Self::Error>;
+
+    /// Writes text at the current cursor position.
     fn write_str(&mut self, text: &str) -> Result<(), Self::Error>;
 
-    // Terminal management
+    /// Clears the visible terminal screen.
     fn clear_screen(&mut self) -> Result<(), Self::Error>;
+
+    /// Clears the terminal's scrollback history.
     fn purge_scrollback(&mut self) -> Result<(), Self::Error>;
+
+    /// Moves the cursor to the terminal's top-left cell.
     fn move_to_top_left(&mut self) -> Result<(), Self::Error>;
 
-    // Commit
+    /// Flushes buffered output to the terminal.
     fn flush(&mut self) -> Result<(), Self::Error>;
 }
 

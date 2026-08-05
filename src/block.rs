@@ -23,9 +23,12 @@ impl RenderContext {
     }
 }
 
+/// A unit of content that can render itself as terminal lines.
 pub trait Block {
+    /// Renders this block into lines that contain no newline or carriage-return characters.
     fn render(&self, context: &RenderContext) -> Vec<Cow<'_, str>>;
 
+    /// Returns whether this block should bypass Mural's render cache.
     fn render_every_frame(&self) -> bool {
         false
     }
