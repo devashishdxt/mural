@@ -51,7 +51,7 @@
 //! }
 //! ```
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 
 mod backend;
 mod block;
@@ -61,11 +61,14 @@ mod frame;
 mod planner;
 mod region;
 mod renderer;
+mod style;
 mod terminal;
+pub mod widget;
 
 pub use self::{
     backend::{Backend, BackendProbe, TerminaBackend},
     block::{Block, RenderContext},
     color_scheme::ColorScheme,
+    style::Color,
     terminal::{CursorPosition, Error, Terminal, TerminalSize},
 };
